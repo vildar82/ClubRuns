@@ -23,6 +23,10 @@ var app = builder.Build();
 var repository = app.Services.GetRequiredService<SqliteRepository>();
 await repository.InitializeAsync();
 
+// Seed bootstrap admins from config; dynamic additions are stored in DB.
+var appOptions = app.Services.GetRequiredService<IOptions<AppOptions>>().Value;
+await repository.EnsureAdminsAsync(appOptions.Telegram.AdminTelegramUserIds);
+
 ConfigureListenFromRedirectUri(app);
 app.MapGet("/", () => Results.Text("Lisi Sunrise bot is running."));
 app.MapStravaEndpoints();

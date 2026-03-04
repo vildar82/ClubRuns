@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/SolutionFolder/">
     <File Path=".gitignore" />
+    <File Path="README.md" />
   </Folder>
   <Project Path="LisiSunrise/LisiSunrise.csproj" />
 </Solution>

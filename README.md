@@ -35,8 +35,14 @@ Telegram bot + Strava Friday attendance auto-check.
   Cancels active import session.
 - `/importlegacyexample`  
   Sends a short example of import text format.
+- `/myid`  
+  Shows your Telegram user id.
+- `/admins` (admin only)  
+  Lists current admins.
+- `/addadmin <id|@username>` (admin only)  
+  Adds a new admin dynamically.
 
-Admin access is controlled by `Telegram.AdminTelegramUserIds`.
+Admin bootstrap is controlled by `Telegram.AdminTelegramUserIds`. After startup, current admins can add other admins with `/addadmin`.
 
 ## Quick Start
 

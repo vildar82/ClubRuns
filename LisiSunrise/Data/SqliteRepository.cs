@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS legacy_stats (
     source_line TEXT NOT NULL,
     imported_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS admins (
+    telegram_user_id INTEGER PRIMARY KEY,
+    added_by_telegram_user_id INTEGER,
+    added_at INTEGER NOT NULL
+);
 ";
 
         await using var command = connection.CreateCommand();
@@ -504,7 +510,71 @@ GROUP BY u.telegram_user_id, u.telegram_username, u.first_name, u.last_name;";
 
         return (totalRuns, latestAttendance, highestAttendance, highestDate);
     }
+    public async Task EnsureAdminsAsync(IEnumerable<long> telegramUserIds, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
 
+        foreach (var telegramUserId in telegramUserIds.Distinct())
+        {
+            await using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+INSERT INTO admins (telegram_user_id, added_by_telegram_user_id, added_at)
+VALUES ($telegram_user_id, NULL, $added_at)
+ON CONFLICT(telegram_user_id) DO NOTHING;";
+            cmd.Parameters.AddWithValue("$telegram_user_id", telegramUserId);
+            cmd.Parameters.AddWithValue("$added_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    public async Task<bool> IsAdminAsync(long telegramUserId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM admins WHERE telegram_user_id = $telegram_user_id LIMIT 1;";
+        cmd.Parameters.AddWithValue("$telegram_user_id", telegramUserId);
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is not null;
+    }
+
+    public async Task AddAdminAsync(long telegramUserId, long addedByTelegramUserId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO admins (telegram_user_id, added_by_telegram_user_id, added_at)
+VALUES ($telegram_user_id, $added_by, $added_at)
+ON CONFLICT(telegram_user_id) DO UPDATE SET
+    added_by_telegram_user_id = excluded.added_by_telegram_user_id,
+    added_at = excluded.added_at;";
+        cmd.Parameters.AddWithValue("$telegram_user_id", telegramUserId);
+        cmd.Parameters.AddWithValue("$added_by", addedByTelegramUserId);
+        cmd.Parameters.AddWithValue("$added_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<long>> GetAdminTelegramUserIdsAsync(CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT telegram_user_id FROM admins ORDER BY telegram_user_id;";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<long>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(reader.GetInt64(0));
+        }
+
+        return list;
+    }
     private static UserRecord MapUser(SqliteDataReader reader)
     {
         return new UserRecord(
@@ -516,3 +586,5 @@ GROUP BY u.telegram_user_id, u.telegram_username, u.first_name, u.last_name;";
             DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)));
     }
 }
+
+
