@@ -103,6 +103,7 @@ RegisterCoreServices(builder.Services, builder.Configuration);
 builder.Services.AddHostedService<TelegramBotHostedService>();
 builder.Services.AddHostedService<SchedulerService>();
 builder.Services.AddTransient<AttendanceJobService>();
+builder.Services.AddTransient<LegacyStatsImporterService>();
 builder.Services.AddTransient<LeaderboardService>();
 
 var app = builder.Build();

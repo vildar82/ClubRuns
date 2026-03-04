@@ -30,8 +30,18 @@ Telegram bot + Strava Friday attendance auto-check.
   Prints a short list of users with connection status (`connected` / `not connected`).
 - `/run` (admin only)  
   Triggers attendance job immediately and returns summary in chat.
+- `/job` (admin only)  
+  Alias for `/run`.
 - `/leaderboard`  
   Shows combined leaderboard: imported legacy baseline + auto-tracked attendance.
+- `/importlegacy` (admin only)  
+  Starts legacy import session. Send raw leaderboard text messages after this command.
+- `/importlegacydone` (admin only)  
+  Finishes import session and writes parsed data into `legacy_stats`.
+- `/importlegacycancel` (admin only)  
+  Cancels active import session.
+- `/importlegacyexample`  
+  Sends a short example of import text format.
 
 Admin access is controlled by `Telegram.AdminTelegramUserIds`.
 
@@ -139,6 +149,11 @@ Create a Friday 12:00 task (Tbilisi timezone should be set at OS/task level):
 - Stores parsed baseline records in `legacy_stats` table (table is replaced on each import).
 - Intended for bootstrapping manual history before full automation.
 - These baseline records are included in `/leaderboard` and job leaderboard output.
+
+Recommended server flow:
+- Run only `bot` mode as a long-running process.
+- Trigger jobs via `/run` or scheduler.
+- Import legacy stats directly via Telegram commands (`/importlegacy` ... `/importlegacydone`).
 
 ## MVP Notes
 

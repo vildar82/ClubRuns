@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Concurrent;
 using LisySunrise.Config;
 using LisySunrise.Data;
 using Microsoft.Extensions.Options;
@@ -16,11 +17,13 @@ public sealed class TelegramBotHostedService(
     SqliteRepository repository,
     StravaApiClient stravaApi,
     AttendanceJobService attendanceJob,
+    LegacyStatsImporterService legacyImporter,
     LeaderboardService leaderboardService,
     IOptions<AppOptions> options,
     ILogger<TelegramBotHostedService> logger) : BackgroundService
 {
     private readonly AppOptions _options = options.Value;
+    private readonly ConcurrentDictionary<long, LegacyImportSession> _importSessions = new();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -54,13 +57,16 @@ public sealed class TelegramBotHostedService(
 
         var from = update.Message.From;
         var chatId = update.Message.Chat.Id;
+        var telegramUserId = from.Id;
 
         if (!text.StartsWith('/'))
         {
+            await HandleLegacyImportChunkAsync(chatId, telegramUserId, text, ct);
             return;
         }
 
-        var command = text.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+        var rawCommand = text.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+        var command = rawCommand.Split('@')[0];
 
         // Commands are intentionally small for MVP; each one maps to a dedicated handler.
         switch (command)
@@ -80,8 +86,23 @@ public sealed class TelegramBotHostedService(
             case "/run":
                 await HandleRunAsync(chatId, from.Id, ct);
                 break;
+            case "/job":
+                await HandleRunAsync(chatId, from.Id, ct);
+                break;
             case "/leaderboard":
                 await HandleLeaderboardAsync(chatId, ct);
+                break;
+            case "/importlegacy":
+                await HandleImportLegacyStartAsync(chatId, telegramUserId, ct);
+                break;
+            case "/importlegacydone":
+                await HandleImportLegacyDoneAsync(chatId, telegramUserId, ct);
+                break;
+            case "/importlegacycancel":
+                await HandleImportLegacyCancelAsync(chatId, telegramUserId, ct);
+                break;
+            case "/importlegacyexample":
+                await HandleImportLegacyExampleAsync(chatId, ct);
                 break;
         }
     }
@@ -165,6 +186,81 @@ public sealed class TelegramBotHostedService(
         await botClient.SendMessage(chatId, text, cancellationToken: ct);
     }
 
+    private async Task HandleImportLegacyStartAsync(long chatId, long telegramUserId, CancellationToken ct)
+    {
+        if (!IsAdmin(telegramUserId))
+        {
+            return;
+        }
+
+        _importSessions[telegramUserId] = new LegacyImportSession(chatId, new StringBuilder(), 0);
+        await botClient.SendMessage(
+            chatId,
+            "Legacy import started. Send leaderboard text in one or more messages, then run /importlegacydone. Use /importlegacycancel to abort.",
+            cancellationToken: ct);
+    }
+
+    private async Task HandleImportLegacyDoneAsync(long chatId, long telegramUserId, CancellationToken ct)
+    {
+        if (!IsAdmin(telegramUserId))
+        {
+            return;
+        }
+
+        if (!_importSessions.TryRemove(telegramUserId, out var session))
+        {
+            await botClient.SendMessage(chatId, "No active import session. Start with /importlegacy.", cancellationToken: ct);
+            return;
+        }
+
+        var (imported, skipped) = await legacyImporter.ImportAsync(session.Buffer.ToString(), ct);
+        await botClient.SendMessage(
+            chatId,
+            $"Legacy stats imported. Imported: {imported}, skipped lines: {skipped}.",
+            cancellationToken: ct);
+    }
+
+    private async Task HandleImportLegacyCancelAsync(long chatId, long telegramUserId, CancellationToken ct)
+    {
+        if (!IsAdmin(telegramUserId))
+        {
+            return;
+        }
+
+        _importSessions.TryRemove(telegramUserId, out _);
+        await botClient.SendMessage(chatId, "Legacy import cancelled.", cancellationToken: ct);
+    }
+
+    private async Task HandleImportLegacyExampleAsync(long chatId, CancellationToken ct)
+    {
+        await botClient.SendMessage(chatId, BuildLegacyExampleText(), cancellationToken: ct);
+    }
+
+    private async Task HandleLegacyImportChunkAsync(long chatId, long telegramUserId, string text, CancellationToken ct)
+    {
+        if (!IsAdmin(telegramUserId))
+        {
+            return;
+        }
+
+        if (!_importSessions.TryGetValue(telegramUserId, out var session))
+        {
+            return;
+        }
+
+        if (session.ChatId != chatId)
+        {
+            return;
+        }
+
+        session.Buffer.AppendLine(text);
+        session.ChunksCount++;
+        if (session.ChunksCount % 3 == 0)
+        {
+            await botClient.SendMessage(chatId, $"Received {session.ChunksCount} message chunks so far.", cancellationToken: ct);
+        }
+    }
+
     private bool IsAdmin(long telegramUserId) => _options.Telegram.AdminTelegramUserIds.Contains(telegramUserId);
 
     private async Task<string> BuildConnectUrlAsync(long telegramUserId, CancellationToken ct)
@@ -195,5 +291,23 @@ public sealed class TelegramBotHostedService(
 
         var fullName = $"{user.FirstName} {user.LastName}".Trim();
         return string.IsNullOrWhiteSpace(fullName) ? user.TelegramUserId.ToString() : fullName;
+    }
+
+    private static string BuildLegacyExampleText()
+    {
+        return """
+               🏃Sunny Leaderboard 2025/2026 😎
+
+               Kosta (http://t.me/konstantin_kochura) 15 🌞🌞🌞🌞🌞🌥🌞🌞🌥🌞🌞🌞🌞🌞🌞
+               Vasiliy (http://t.me/vasiliyizrossii) 12 🌞🌞🌞🌞🌥🌞🌥🌞🌥🌞🌞🌞
+               Levan (http://t.me/levan_jabua) 11 🌞🌥🌞🌥🌞🌥🌞🌞🌞🌞🌞
+               """;
+    }
+
+    private sealed class LegacyImportSession(long chatId, StringBuilder buffer, int chunksCount)
+    {
+        public long ChatId { get; } = chatId;
+        public StringBuilder Buffer { get; } = buffer;
+        public int ChunksCount { get; set; } = chunksCount;
     }
 }
