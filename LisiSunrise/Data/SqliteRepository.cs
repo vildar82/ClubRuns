@@ -79,7 +79,18 @@ CREATE TABLE IF NOT EXISTS legacy_stats (
     imported_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS admins (`r`n    telegram_user_id INTEGER PRIMARY KEY,`r`n    added_by_telegram_user_id INTEGER,`r`n    added_at INTEGER NOT NULL`r`n);`r`n`r`nCREATE TABLE IF NOT EXISTS app_settings (`r`n    key TEXT PRIMARY KEY,`r`n    value TEXT NOT NULL,`r`n    updated_at INTEGER NOT NULL`r`n);`r`n";
+CREATE TABLE IF NOT EXISTS admins (
+    telegram_user_id INTEGER PRIMARY KEY,
+    added_by_telegram_user_id INTEGER,
+    added_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+";
 
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -610,6 +621,8 @@ ON CONFLICT(key) DO UPDATE SET
             DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)));
     }
 }
+
+
 
 
 

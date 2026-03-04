@@ -52,88 +52,120 @@ public sealed class TelegramBotHostedService(
         var chatId = update.Message.Chat.Id;
         var telegramUserId = from.Id;
 
-        if (!text.StartsWith('/'))
+        try
         {
-            var consumedByImport = await HandleLegacyImportChunkAsync(chatId, telegramUserId, text, ct);
-            if (!consumedByImport)
+            if (!text.StartsWith('/'))
             {
-                await botClient.SendMessage(chatId, BuildHelpText(), cancellationToken: ct);
+                var consumedByImport = await HandleLegacyImportChunkAsync(chatId, telegramUserId, text, ct);
+                if (!consumedByImport)
+                {
+                    await botClient.SendMessage(chatId, await BuildHelpTextAsync(telegramUserId, ct), cancellationToken: ct);
+                }
+
+                return;
             }
 
-            return;
+            var rawCommand = text.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+            var command = rawCommand.Split('@')[0];
+
+            switch (command)
+            {
+                case "/start":
+                    await HandleStartAsync(chatId, from, ct);
+                    break;
+                case "/connect":
+                    await HandleConnectAsync(chatId, from.Id, ct);
+                    break;
+                case "/status":
+                    await HandleStatusAsync(chatId, telegramUserId, ct);
+                    break;
+                case "/users":
+                    await HandleUsersAsync(chatId, telegramUserId, ct);
+                    break;
+                case "/run":
+                case "/job":
+                    await HandleRunAsync(chatId, telegramUserId, text, ct);
+                    break;
+                case "/leaderboard":
+                    await HandleLeaderboardAsync(chatId, ct);
+                    break;
+                case "/importlegacy":
+                    await HandleImportLegacyStartAsync(chatId, telegramUserId, ct);
+                    break;
+                case "/importlegacydone":
+                    await HandleImportLegacyDoneAsync(chatId, telegramUserId, ct);
+                    break;
+                case "/importlegacycancel":
+                    await HandleImportLegacyCancelAsync(chatId, telegramUserId, ct);
+                    break;
+                case "/importlegacyexample":
+                    await HandleImportLegacyExampleAsync(chatId, ct);
+                    break;
+                case "/addadmin":
+                    await HandleAddAdminAsync(chatId, telegramUserId, text, ct);
+                    break;
+                case "/admins":
+                    await HandleAdminsAsync(chatId, telegramUserId, ct);
+                    break;
+                case "/setstrava":
+                    await HandleSetStravaAsync(chatId, telegramUserId, text, ct);
+                    break;
+                case "/stravastatus":
+                    await HandleStravaStatusAsync(chatId, telegramUserId, ct);
+                    break;
+                case "/myid":
+                    await botClient.SendMessage(chatId, $"Your Telegram user id: {telegramUserId}", cancellationToken: ct);
+                    break;
+                case "/help":
+                    await botClient.SendMessage(chatId, await BuildHelpTextAsync(telegramUserId, ct), cancellationToken: ct);
+                    break;
+                default:
+                    await botClient.SendMessage(chatId, await BuildHelpTextAsync(telegramUserId, ct), cancellationToken: ct);
+                    break;
+            }
         }
-
-        var rawCommand = text.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
-        var command = rawCommand.Split('@')[0];
-
-        switch (command)
+        catch (Exception ex)
         {
-            case "/start":
-                await HandleStartAsync(chatId, from, ct);
-                break;
-            case "/connect":
-                await HandleConnectAsync(chatId, from.Id, ct);
-                break;
-            case "/status":
-                await HandleStatusAsync(chatId, telegramUserId, ct);
-                break;
-            case "/users":
-                await HandleUsersAsync(chatId, telegramUserId, ct);
-                break;
-            case "/run":
-            case "/job":
-                await HandleRunAsync(chatId, telegramUserId, ct);
-                break;
-            case "/leaderboard":
-                await HandleLeaderboardAsync(chatId, ct);
-                break;
-            case "/importlegacy":
-                await HandleImportLegacyStartAsync(chatId, telegramUserId, ct);
-                break;
-            case "/importlegacydone":
-                await HandleImportLegacyDoneAsync(chatId, telegramUserId, ct);
-                break;
-            case "/importlegacycancel":
-                await HandleImportLegacyCancelAsync(chatId, telegramUserId, ct);
-                break;
-            case "/importlegacyexample":
-                await HandleImportLegacyExampleAsync(chatId, ct);
-                break;
-            case "/addadmin":
-                await HandleAddAdminAsync(chatId, telegramUserId, text, ct);
-                break;
-            case "/admins":
-                await HandleAdminsAsync(chatId, telegramUserId, ct);
-                break;
-            case "/setstrava":
-                await HandleSetStravaAsync(chatId, telegramUserId, text, ct);
-                break;
-            case "/stravastatus":
-                await HandleStravaStatusAsync(chatId, telegramUserId, ct);
-                break;
-            case "/myid":
-                await botClient.SendMessage(chatId, $"Your Telegram user id: {telegramUserId}", cancellationToken: ct);
-                break;
-            case "/help":
-                await botClient.SendMessage(chatId, BuildHelpText(), cancellationToken: ct);
-                break;
-            default:
-                await botClient.SendMessage(chatId, BuildHelpText(), cancellationToken: ct);
-                break;
+            logger.LogError(ex, "Failed to process Telegram update for user {TelegramUserId}. Text: {Text}", telegramUserId, text);
+
+            var userMessage = ex is InvalidOperationException
+                ? ex.Message
+                : "Unexpected error while processing your request. Please try again.";
+
+            try
+            {
+                await botClient.SendMessage(chatId, userMessage, cancellationToken: ct);
+            }
+            catch (Exception sendEx)
+            {
+                logger.LogWarning(sendEx, "Failed to send error message to chat {ChatId}", chatId);
+            }
         }
     }
 
     private async Task HandleStartAsync(long chatId, User from, CancellationToken ct)
     {
         await repository.UpsertUserAsync(from.Id, from.Username, from.FirstName, from.LastName, ct);
-        var url = await BuildConnectUrlAsync(from.Id, ct);
-        var keyboard = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("Connect Strava", url));
 
-        await botClient.SendMessage(
-            chatId,
-            "Welcome! Press the button to connect your Strava account.",
-            replyMarkup: keyboard,
-            cancellationToken: ct);
+        try
+        {
+            var url = await BuildConnectUrlAsync(from.Id, ct);
+            var keyboard = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("Connect Strava", url));
+
+            await botClient.SendMessage(
+                chatId,
+                "Welcome! Press the button to connect your Strava account.",
+                replyMarkup: keyboard,
+                cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to build Strava connect URL on /start");
+            await botClient.SendMessage(
+                chatId,
+                "Profile is saved, but Strava credentials are not configured yet. Ask admin to run /setstrava.",
+                cancellationToken: ct);
+        }
     }
 
     private async Task HandleConnectAsync(long chatId, long telegramUserId, CancellationToken ct)
@@ -182,21 +214,27 @@ public sealed class TelegramBotHostedService(
         await botClient.SendMessage(chatId, text, cancellationToken: ct);
     }
 
-    private async Task HandleRunAsync(long chatId, long telegramUserId, CancellationToken ct)
+    private async Task HandleRunAsync(long chatId, long telegramUserId, string fullText, CancellationToken ct)
     {
         if (!await EnsureAdminOrReplyAsync(chatId, telegramUserId, ct))
         {
             return;
         }
 
+        var targetDate = ParseRunDate(fullText);
+        if (fullText.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 2 && !targetDate.HasValue)
+        {
+            await botClient.SendMessage(chatId, "Invalid date format. Use: /run YYYY-MM-DD", cancellationToken: ct);
+            return;
+        }
+
         await botClient.SendMessage(chatId, "Running attendance job...", cancellationToken: ct);
-        var result = await attendanceJob.RunAsync(null, ct);
+        var result = await attendanceJob.RunAsync(targetDate, ct);
         await botClient.SendMessage(
             chatId,
             $"Done. Found: {result.Found.Count}, Not found: {result.NotFound.Count}, Errors: {result.Errors.Count}",
             cancellationToken: ct);
     }
-
     private async Task HandleLeaderboardAsync(long chatId, CancellationToken ct)
     {
         var summary = await leaderboardService.BuildSummaryAsync(ct);
@@ -441,6 +479,23 @@ public sealed class TelegramBotHostedService(
         return string.IsNullOrWhiteSpace(fullName) ? user.TelegramUserId.ToString() : fullName;
     }
 
+
+    private static DateTime? ParseRunDate(string fullText)
+    {
+        var parts = fullText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+        {
+            return null;
+        }
+
+        if (DateTime.TryParseExact(parts[1], "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
+        {
+            return parsed.Date;
+        }
+
+        return null;
+    }
+
     private static string BuildLegacyExampleText()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "legacy_stats.example.txt");
@@ -459,7 +514,7 @@ public sealed class TelegramBotHostedService(
         public int ChunksCount { get; set; } = chunksCount;
     }
 
-    private string BuildHelpText()
+    private async Task<string> BuildHelpTextAsync(long telegramUserId, CancellationToken ct)
     {
         var lines = new List<string>
         {
@@ -471,19 +526,54 @@ public sealed class TelegramBotHostedService(
             "/help - show this help"
         };
 
-        lines.Add("Admin commands:");
-        lines.Add("/status - users summary");
-        lines.Add("/users - list users and Strava status");
-        lines.Add("/run or /job - run attendance check now");
-        lines.Add("/admins - list current admins");
-        lines.Add("/addadmin <id|@username> - add admin");
-        lines.Add("/setstrava <client_id> <client_secret> - set Strava credentials");
-        lines.Add("/stravastatus - show Strava credentials status");
-        lines.Add("/importlegacy - start legacy import session");
-        lines.Add("/importlegacydone - finish and import");
-        lines.Add("/importlegacycancel - cancel import");
-        lines.Add("/importlegacyexample - show import format example");
+        var isAdmin = await repository.IsAdminAsync(telegramUserId, ct);
+        if (isAdmin)
+        {
+            lines.Add(string.Empty);
+            lines.Add("Admin commands:");
+            lines.Add("/status - users summary");
+            lines.Add("/users - list users and Strava status");
+            lines.Add("/run or /job [YYYY-MM-DD] - run attendance check (optional target date)");
+            lines.Add("/admins - list current admins");
+            lines.Add("/addadmin <id|@username> - add admin");
+            lines.Add("/setstrava <client_id> <client_secret> - set Strava credentials");
+            lines.Add("/stravastatus - show Strava credentials status");
+            lines.Add("/importlegacy - start legacy import session");
+            lines.Add("/importlegacydone - finish and import");
+            lines.Add("/importlegacycancel - cancel import");
+            lines.Add("/importlegacyexample - show import format example");
+        }
+        else
+        {
+            lines.Add(string.Empty);
+            lines.Add("Admin commands are hidden.");
+            lines.Add($"How to become admin: ask an existing admin to run /addadmin {telegramUserId}");
+        }
+
+        var adminIds = await repository.GetAdminTelegramUserIdsAsync(ct);
+        if (adminIds.Count > 0)
+        {
+            var adminLabels = new List<string>();
+            foreach (var adminId in adminIds)
+            {
+                var adminUser = await repository.GetUserByTelegramIdAsync(adminId, ct);
+                if (adminUser is not null && !string.IsNullOrWhiteSpace(adminUser.TelegramUsername))
+                {
+                    adminLabels.Add($"@{adminUser.TelegramUsername}");
+                }
+                else
+                {
+                    adminLabels.Add(adminId.ToString());
+                }
+            }
+
+            lines.Add(string.Empty);
+            lines.Add("Current admins: " + string.Join(", ", adminLabels));
+        }
 
         return string.Join(Environment.NewLine, lines);
     }
 }
+
+
+
