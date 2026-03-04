@@ -13,7 +13,7 @@ public sealed class AppOptions
 public sealed class TelegramOptions
 {
     public string BotToken { get; init; } = string.Empty;
-    public long GroupChatId { get; init; }
+    public long? GroupChatId { get; init; }
     public long[] AdminTelegramUserIds { get; init; } = [];
 }
 

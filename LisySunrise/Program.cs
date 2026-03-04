@@ -30,10 +30,26 @@ if (mode == "job")
     await repo.InitializeAsync();
 
     var job = host.Services.GetRequiredService<AttendanceJobService>();
-    var result = await job.RunAsync();
+    var result = await job.RunAsync(targetLocalDate: null, publishToDefaultTarget: false);
 
-    Console.WriteLine($"Run date: {result.RunDate}");
-    Console.WriteLine($"Found: {result.Found.Count}, Not found: {result.NotFound.Count}, Errors: {result.Errors.Count}");
+    Console.WriteLine(job.BuildReportText(result));
+    Console.WriteLine();
+    Console.Write("Send report to Telegram (enter @username or chat id, empty to skip): ");
+    var target = Console.ReadLine()?.Trim();
+    if (!string.IsNullOrWhiteSpace(target))
+    {
+        var chatId = await ResolveChatIdAsync(target, repo);
+        if (chatId.HasValue)
+        {
+            await job.PublishReportToChatAsync(result, chatId.Value, CancellationToken.None);
+            Console.WriteLine($"Report sent to chat {chatId.Value}.");
+        }
+        else
+        {
+            Console.WriteLine($"Unable to resolve Telegram target: {target}");
+        }
+    }
+
     return;
 }
 
@@ -153,4 +169,21 @@ static void ConfigureListenFromRedirectUri(WebApplication app)
     {
         app.Urls.Add(listenUrl);
     }
+}
+
+static async Task<long?> ResolveChatIdAsync(string target, SqliteRepository repo)
+{
+    if (long.TryParse(target, out var numericChatId))
+    {
+        return numericChatId;
+    }
+
+    var username = target.TrimStart('@');
+    if (string.IsNullOrWhiteSpace(username))
+    {
+        return null;
+    }
+
+    var user = await repo.GetUserByTelegramUsernameAsync(username);
+    return user?.TelegramUserId;
 }

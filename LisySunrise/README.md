@@ -15,7 +15,7 @@ Telegram bot + Strava Friday attendance auto-check.
   - `/run` (admin)
 - Automatic Strava token refresh.
 - Strava token encryption at rest using Windows DPAPI (`CurrentUser` scope).
-- Telegram group report with `found` / `not found` / `errors` sections.
+- Optional Telegram report target (group if configured, or manual user target in `job` mode).
 - Console + file logging.
 
 ## Quick Start
@@ -51,7 +51,7 @@ Below is what each property means and where to get it.
 - `Telegram.BotToken`  
   Telegram bot API token. Create a bot via `@BotFather` in Telegram, run `/newbot`, copy the token.
 - `Telegram.GroupChatId`  
-  Target Telegram group chat id where reports are posted. Add bot to group, send a message, then read chat id using Telegram Bot API `getUpdates` (or a helper bot like `@RawDataBot`).
+  Optional default Telegram chat id for automatic report publishing (for example, a group id). If empty/null, automatic job publishing is skipped.
 - `Telegram.AdminTelegramUserIds`  
   Telegram user ids allowed to run admin commands (`/status`, `/users`, `/run`). Use `getUpdates` to read your user id after sending a private message to the bot.
 
@@ -94,6 +94,11 @@ Create a Friday 12:00 task (Tbilisi timezone should be set at OS/task level):
 - Program/script: `dotnet`
 - Arguments: `run --project C:\dev\LisySunrise\LisySunrise\LisySunrise.csproj -- job`
 - Start in: `C:\dev\LisySunrise\LisySunrise`
+
+`job` mode behavior:
+- Always prints full report to console.
+- Optionally asks for a Telegram destination (`@username` or numeric `chat id`) and sends the same report there.
+- `@username` works only for users already present in local DB (they must have used `/start` before).
 
 ## MVP Notes
 

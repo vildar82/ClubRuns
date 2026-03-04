@@ -16,7 +16,10 @@ public sealed class AttendanceJobService(
     private readonly AppOptions _options = options.Value;
     private static readonly TimeZoneInfo TbilisiTimeZone = ResolveTbilisiTimeZone();
 
-    public async Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate = null, CancellationToken ct = default)
+    public Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate = null, CancellationToken ct = default) =>
+        RunAsync(targetLocalDate, publishToDefaultTarget: true, ct);
+
+    public async Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate, bool publishToDefaultTarget, CancellationToken ct = default)
     {
         // Build the run date in Tbilisi local time because attendance is local-event based.
         var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TbilisiTimeZone);
@@ -114,7 +117,11 @@ public sealed class AttendanceJobService(
         await repository.SaveRunAsync(runDate, users.Count, found.Count, ct);
         // Report is published after DB write so audit history is always present.
         var result = new AttendanceRunResult(runDate, found, notFound, errors);
-        await PublishReportAsync(result, ct);
+        if (publishToDefaultTarget)
+        {
+            await PublishReportAsync(result, ct);
+        }
+
         return result;
     }
 
@@ -143,7 +150,27 @@ public sealed class AttendanceJobService(
 
     public async Task PublishReportAsync(AttendanceRunResult result, CancellationToken ct)
     {
-        // Keep message plain-text and compact for Telegram group readability.
+        // If group chat id is not configured, reporting is skipped in automatic mode.
+        if (!_options.Telegram.GroupChatId.HasValue)
+        {
+            logger.LogInformation("Telegram.GroupChatId is not configured. Skipping Telegram report publishing.");
+            return;
+        }
+
+        await PublishReportToChatAsync(result, _options.Telegram.GroupChatId.Value, ct);
+    }
+
+    public async Task PublishReportToChatAsync(AttendanceRunResult result, long chatId, CancellationToken ct)
+    {
+        await telegramBot.SendMessage(
+            chatId,
+            BuildReportText(result),
+            cancellationToken: ct);
+    }
+
+    public string BuildReportText(AttendanceRunResult result)
+    {
+        // Keep message plain-text and compact for Telegram readability.
         var lines = new List<string>
         {
             $"Lisi Sunrise attendance - {result.RunDate}",
@@ -171,11 +198,7 @@ public sealed class AttendanceJobService(
 
         lines.Add(string.Empty);
         lines.Add("If your run is private, bot may not see it. Reconnect with read_all or make activity visible.");
-
-        await telegramBot.SendMessage(
-            _options.Telegram.GroupChatId,
-            string.Join(Environment.NewLine, lines),
-            cancellationToken: ct);
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static TimeSpan ParseLocalTime(string value) => TimeSpan.ParseExact(value, @"hh\:mm", CultureInfo.InvariantCulture);

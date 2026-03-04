@@ -124,6 +124,28 @@ WHERE telegram_user_id = $telegram_user_id;";
         return MapUser(reader);
     }
 
+    public async Task<UserRecord?> GetUserByTelegramUsernameAsync(string telegramUsername, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT id, telegram_user_id, telegram_username, first_name, last_name, created_at
+FROM users
+WHERE telegram_username IS NOT NULL AND lower(telegram_username) = lower($telegram_username)
+LIMIT 1;";
+        cmd.Parameters.AddWithValue("$telegram_username", telegramUsername);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return null;
+        }
+
+        return MapUser(reader);
+    }
+
     public async Task<List<UserWithAuth>> GetAllUsersWithAuthAsync(CancellationToken ct = default)
     {
         await using var connection = new SqliteConnection(_connectionString);
