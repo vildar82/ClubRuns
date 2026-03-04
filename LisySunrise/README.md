@@ -94,6 +94,12 @@ Below is what each property means and where to get it.
 
 - `Database.Path`  
   SQLite file path. Relative path is resolved from app runtime directory.
+- `Schedule.DayOfWeek`  
+  Auto-run day in bot scheduler (`Friday`, `Monday`, etc.).
+- `Schedule.Hour`  
+  Auto-run hour in 24h format (Tbilisi local time).
+- `Schedule.MinuteFrom` / `Schedule.MinuteTo`  
+  Inclusive minute window for catch-up at startup/restart time.
 - `Logging.LogPath`  
   File log path. Relative path is resolved from app runtime directory.
 
@@ -101,6 +107,7 @@ Environment variable mapping uses double underscore, for example:
 - `Strava__ClientId`
 - `Matching__RadiusKm`
 - `Telegram__AdminTelegramUserIds__0`
+- `Schedule__DayOfWeek`
 
 ## Windows Task Scheduler (job mode)
 

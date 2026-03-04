@@ -6,6 +6,7 @@ public sealed class AppOptions
     public TelegramOptions Telegram { get; init; } = new();
     public StravaOptions Strava { get; init; } = new();
     public MatchingOptions Matching { get; init; } = new();
+    public ScheduleOptions Schedule { get; init; } = new();
     public DatabaseOptions Database { get; init; } = new();
     public LoggingOptions Logging { get; init; } = new();
 }
@@ -42,6 +43,15 @@ public sealed class MatchingOptions
 public sealed class DatabaseOptions
 {
     public string Path { get; init; } = "lisi_sunrise.db";
+}
+
+public sealed class ScheduleOptions
+{
+    // Attendance auto-run schedule in Tbilisi local time.
+    public DayOfWeek DayOfWeek { get; init; } = DayOfWeek.Friday;
+    public int Hour { get; init; } = 12;
+    public int MinuteFrom { get; init; } = 0;
+    public int MinuteTo { get; init; } = 10;
 }
 
 public sealed class LoggingOptions
