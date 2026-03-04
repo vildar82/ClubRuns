@@ -89,14 +89,8 @@ static void ConfigureConfiguration(ConfigurationManager configuration)
 static void RegisterCoreServices(IServiceCollection services, IConfiguration configuration)
 {
     services.Configure<AppOptions>(configuration);
-    services.AddSingleton<ITokenProtector>(_ =>
-    {
-        // Current implementation uses Windows DPAPI, so non-Windows runtime is blocked explicitly.
-        if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException("Windows DPAPI token protection requires Windows runtime.");
-
-        return new WindowsDpapiTokenProtector();
-    });
+    // Plain-text mode keeps DB portable across users/machines.
+    services.AddSingleton<ITokenProtector, PlainTextTokenProtector>();
 
     services.AddSingleton(sp =>
     {

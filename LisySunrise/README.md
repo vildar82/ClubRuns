@@ -14,7 +14,7 @@ Telegram bot + Strava Friday attendance auto-check.
   - `/users` (admin)
   - `/run` (admin)
 - Automatic Strava token refresh.
-- Strava token encryption at rest using Windows DPAPI (`CurrentUser` scope).
+- Plain-text token storage in SQLite (portable DB between users/machines).
 - Optional Telegram report target (group if configured, or manual user target in `job` mode).
 - Console + file logging.
 
@@ -126,5 +126,5 @@ Create a Friday 12:00 task (Tbilisi timezone should be set at OS/task level):
 
 - Private activities require `activity:read_all`.
 - If callback server is not reachable at `RedirectUri`, Strava connection cannot complete.
-- DPAPI `CurrentUser` means tokens can be decrypted only by the same Windows user.
+- Tokens are currently stored as plain text in SQLite for portability.
 - For production: add migrations, retry policies, and stricter startup config validation.
