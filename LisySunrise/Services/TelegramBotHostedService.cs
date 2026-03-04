@@ -16,6 +16,7 @@ public sealed class TelegramBotHostedService(
     SqliteRepository repository,
     StravaApiClient stravaApi,
     AttendanceJobService attendanceJob,
+    LeaderboardService leaderboardService,
     IOptions<AppOptions> options,
     ILogger<TelegramBotHostedService> logger) : BackgroundService
 {
@@ -78,6 +79,9 @@ public sealed class TelegramBotHostedService(
                 break;
             case "/run":
                 await HandleRunAsync(chatId, from.Id, ct);
+                break;
+            case "/leaderboard":
+                await HandleLeaderboardAsync(chatId, ct);
                 break;
         }
     }
@@ -152,6 +156,13 @@ public sealed class TelegramBotHostedService(
             chatId,
             $"Done. Found: {result.Found.Count}, Not found: {result.NotFound.Count}, Errors: {result.Errors.Count}",
             cancellationToken: ct);
+    }
+
+    private async Task HandleLeaderboardAsync(long chatId, CancellationToken ct)
+    {
+        var summary = await leaderboardService.BuildSummaryAsync(ct);
+        var text = leaderboardService.BuildText(summary);
+        await botClient.SendMessage(chatId, text, cancellationToken: ct);
     }
 
     private bool IsAdmin(long telegramUserId) => _options.Telegram.AdminTelegramUserIds.Contains(telegramUserId);

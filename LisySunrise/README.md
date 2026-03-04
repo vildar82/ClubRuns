@@ -30,6 +30,8 @@ Telegram bot + Strava Friday attendance auto-check.
   Prints a short list of users with connection status (`connected` / `not connected`).
 - `/run` (admin only)  
   Triggers attendance job immediately and returns summary in chat.
+- `/leaderboard`  
+  Shows combined leaderboard: imported legacy baseline + auto-tracked attendance.
 
 Admin access is controlled by `Telegram.AdminTelegramUserIds`.
 
@@ -50,19 +52,19 @@ Admin access is controlled by `Telegram.AdminTelegramUserIds`.
 3. Run bot mode:
 
 ```powershell
-dotnet run --bot
+dotnet run -- bot
 ```
 
 4. Run one-shot job mode:
 
 ```powershell
-dotnet run --job
+dotnet run -- job
 ```
 
 5. Import manual historical leaderboard text into DB:
 
 ```powershell
-dotnet run --import-legacy .\legacy_stats.txt
+dotnet run -- import-legacy .\legacy_stats.txt
 ```
 
 You can use the sample file included in the repo:
@@ -128,6 +130,7 @@ Create a Friday 12:00 task (Tbilisi timezone should be set at OS/task level):
 
 `job` mode behavior:
 - Always prints full report to console.
+- Prints current combined leaderboard to console.
 - Optionally asks for a Telegram destination (`@username` or numeric `chat id`) and sends the same report there.
 - `@username` works only for users already present in local DB (they must have used `/start` before).
 
@@ -135,6 +138,7 @@ Create a Friday 12:00 task (Tbilisi timezone should be set at OS/task level):
 - Reads leaderboard text file and parses participant rows.
 - Stores parsed baseline records in `legacy_stats` table (table is replaced on each import).
 - Intended for bootstrapping manual history before full automation.
+- These baseline records are included in `/leaderboard` and job leaderboard output.
 
 ## MVP Notes
 

@@ -57,17 +57,21 @@ if (mode == "job")
 
     RegisterCoreServices(hostBuilder.Services, hostBuilder.Configuration);
     hostBuilder.Services.AddTransient<AttendanceJobService>();
+    hostBuilder.Services.AddTransient<LeaderboardService>();
 
     using var host = hostBuilder.Build();
     var repo = host.Services.GetRequiredService<SqliteRepository>();
     await repo.InitializeAsync();
 
     var job = host.Services.GetRequiredService<AttendanceJobService>();
+    var leaderboard = host.Services.GetRequiredService<LeaderboardService>();
     // In console job mode we always print report to stdout first.
     // Telegram sending is optional and chosen interactively after execution.
     var result = await job.RunAsync(targetLocalDate: null, publishToDefaultTarget: false);
 
     Console.WriteLine(job.BuildReportText(result));
+    Console.WriteLine();
+    Console.WriteLine(leaderboard.BuildText(await leaderboard.BuildSummaryAsync()));
     Console.WriteLine();
     Console.Write("Send report to Telegram (enter @username or chat id, empty to skip): ");
     var target = Console.ReadLine()?.Trim();
@@ -99,6 +103,7 @@ RegisterCoreServices(builder.Services, builder.Configuration);
 builder.Services.AddHostedService<TelegramBotHostedService>();
 builder.Services.AddHostedService<SchedulerService>();
 builder.Services.AddTransient<AttendanceJobService>();
+builder.Services.AddTransient<LeaderboardService>();
 
 var app = builder.Build();
 

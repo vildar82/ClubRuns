@@ -405,6 +405,107 @@ VALUES ($display_name, $telegram_username, $runs_count, $sun_count, $nosun_count
         await tx.CommitAsync(ct);
     }
 
+    public async Task<List<LegacyStatRecord>> GetLegacyStatsAsync(CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT display_name, telegram_username, runs_count, sun_count, nosun_count
+FROM legacy_stats;";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<LegacyStatRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new LegacyStatRecord(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetInt32(2),
+                reader.GetInt32(3),
+                reader.GetInt32(4)));
+        }
+
+        return list;
+    }
+
+    public async Task<List<AutoAttendanceAggregate>> GetAutoAttendanceAggregatesAsync(CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT
+    u.telegram_user_id,
+    u.telegram_username,
+    u.first_name,
+    u.last_name,
+    SUM(CASE WHEN a.activity_id IS NOT NULL THEN 1 ELSE 0 END) AS sun_count,
+    SUM(CASE WHEN a.activity_id IS NULL AND a.matched_reason NOT LIKE 'error:%' THEN 1 ELSE 0 END) AS nosun_count
+FROM attendance a
+JOIN users u ON u.id = a.user_id
+LEFT JOIN strava_auth sa ON sa.user_id = u.id
+WHERE sa.user_id IS NOT NULL
+GROUP BY u.telegram_user_id, u.telegram_username, u.first_name, u.last_name;";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<AutoAttendanceAggregate>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new AutoAttendanceAggregate(
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.GetInt32(4),
+                reader.GetInt32(5)));
+        }
+
+        return list;
+    }
+
+    public async Task<(int totalRuns, int? latestAttendance, int? highestAttendance, string? highestDate)> GetRunsSummaryAsync(CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        var totalRuns = 0;
+        int? latestAttendance = null;
+        int? highestAttendance = null;
+        string? highestDate = null;
+
+        await using (var totalCmd = connection.CreateCommand())
+        {
+            totalCmd.CommandText = "SELECT COUNT(*) FROM runs;";
+            totalRuns = Convert.ToInt32(await totalCmd.ExecuteScalarAsync(ct) ?? 0);
+        }
+
+        await using (var latestCmd = connection.CreateCommand())
+        {
+            latestCmd.CommandText = "SELECT found_count FROM runs ORDER BY date DESC LIMIT 1;";
+            var value = await latestCmd.ExecuteScalarAsync(ct);
+            if (value is not null && value is not DBNull)
+            {
+                latestAttendance = Convert.ToInt32(value);
+            }
+        }
+
+        await using (var highestCmd = connection.CreateCommand())
+        {
+            highestCmd.CommandText = "SELECT found_count, date FROM runs ORDER BY found_count DESC, date ASC LIMIT 1;";
+            await using var reader = await highestCmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                highestAttendance = reader.GetInt32(0);
+                highestDate = reader.GetString(1);
+            }
+        }
+
+        return (totalRuns, latestAttendance, highestAttendance, highestDate);
+    }
+
     private static UserRecord MapUser(SqliteDataReader reader)
     {
         return new UserRecord(
