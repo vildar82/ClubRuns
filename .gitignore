@@ -274,3 +274,8 @@ global.json
 .nuke/temp
 
 RxBim.Build.Props
+# Local secrets for LisiSunrise
+local.settings.json
+LisiSunrise/local.settings.json
+LisiSunrise/*.db
+LisiSunrise/bin/verify/

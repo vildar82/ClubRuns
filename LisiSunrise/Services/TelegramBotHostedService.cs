@@ -13,6 +13,7 @@ public sealed class TelegramBotHostedService(
     ITelegramBotClient botClient,
     SqliteRepository repository,
     StravaApiClient stravaApi,
+    RuntimeSettingsService runtimeSettings,
     AttendanceJobService attendanceJob,
     LegacyStatsImporterService legacyImporter,
     LeaderboardService leaderboardService,
@@ -104,6 +105,12 @@ public sealed class TelegramBotHostedService(
             case "/admins":
                 await HandleAdminsAsync(chatId, telegramUserId, ct);
                 break;
+            case "/setstrava":
+                await HandleSetStravaAsync(chatId, telegramUserId, text, ct);
+                break;
+            case "/stravastatus":
+                await HandleStravaStatusAsync(chatId, telegramUserId, ct);
+                break;
             case "/myid":
                 await botClient.SendMessage(chatId, $"Your Telegram user id: {telegramUserId}", cancellationToken: ct);
                 break;
@@ -138,9 +145,17 @@ public sealed class TelegramBotHostedService(
             return;
         }
 
-        var url = await BuildConnectUrlAsync(telegramUserId, ct);
-        var keyboard = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("Connect Strava", url));
-        await botClient.SendMessage(chatId, "Connect your Strava account:", replyMarkup: keyboard, cancellationToken: ct);
+        try
+        {
+            var url = await BuildConnectUrlAsync(telegramUserId, ct);
+            var keyboard = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("Connect Strava", url));
+            await botClient.SendMessage(chatId, "Connect your Strava account:", replyMarkup: keyboard, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to build Strava connect URL");
+            await botClient.SendMessage(chatId, "Strava credentials are not configured. Ask admin to run /setstrava.", cancellationToken: ct);
+        }
     }
 
     private async Task HandleStatusAsync(long chatId, long telegramUserId, CancellationToken ct)
@@ -299,6 +314,38 @@ public sealed class TelegramBotHostedService(
         await botClient.SendMessage(chatId, string.Join('\n', lines), cancellationToken: ct);
     }
 
+    private async Task HandleSetStravaAsync(long chatId, long telegramUserId, string fullText, CancellationToken ct)
+    {
+        if (!await EnsureAdminOrReplyAsync(chatId, telegramUserId, ct))
+        {
+            return;
+        }
+
+        var parts = fullText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 3)
+        {
+            await botClient.SendMessage(chatId, "Usage: /setstrava <client_id> <client_secret>", cancellationToken: ct);
+            return;
+        }
+
+        await runtimeSettings.SetStravaCredentialsAsync(parts[1], parts[2], ct);
+        await botClient.SendMessage(chatId, "Strava credentials updated in database settings.", cancellationToken: ct);
+    }
+
+    private async Task HandleStravaStatusAsync(long chatId, long telegramUserId, CancellationToken ct)
+    {
+        if (!await EnsureAdminOrReplyAsync(chatId, telegramUserId, ct))
+        {
+            return;
+        }
+
+        var clientId = await runtimeSettings.GetStravaClientIdAsync(ct);
+        var clientSecret = await runtimeSettings.GetStravaClientSecretAsync(ct);
+        var idStatus = string.IsNullOrWhiteSpace(clientId) ? "missing" : "set";
+        var secretStatus = string.IsNullOrWhiteSpace(clientSecret) ? "missing" : "set";
+        await botClient.SendMessage(chatId, $"Strava settings: ClientId={idStatus}, ClientSecret={secretStatus}", cancellationToken: ct);
+    }
+
     private async Task<bool> HandleLegacyImportChunkAsync(long chatId, long telegramUserId, string text, CancellationToken ct)
     {
         if (!await repository.IsAdminAsync(telegramUserId, ct))
@@ -371,7 +418,7 @@ public sealed class TelegramBotHostedService(
     {
         var state = CreateStateToken(telegramUserId);
         await repository.SaveOAuthStateAsync(state, telegramUserId, ct);
-        return stravaApi.BuildAuthorizeUrl(state);
+        return await stravaApi.BuildAuthorizeUrlAsync(state, ct);
     }
 
     private static string CreateStateToken(long telegramUserId)
@@ -430,6 +477,8 @@ public sealed class TelegramBotHostedService(
         lines.Add("/run or /job - run attendance check now");
         lines.Add("/admins - list current admins");
         lines.Add("/addadmin <id|@username> - add admin");
+        lines.Add("/setstrava <client_id> <client_secret> - set Strava credentials");
+        lines.Add("/stravastatus - show Strava credentials status");
         lines.Add("/importlegacy - start legacy import session");
         lines.Add("/importlegacydone - finish and import");
         lines.Add("/importlegacycancel - cancel import");

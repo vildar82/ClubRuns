@@ -16,6 +16,7 @@ builder.Services.AddHostedService<SchedulerService>();
 builder.Services.AddTransient<AttendanceJobService>();
 builder.Services.AddTransient<LegacyStatsImporterService>();
 builder.Services.AddTransient<LeaderboardService>();
+builder.Services.AddSingleton<RuntimeSettingsService>();
 
 var app = builder.Build();
 
@@ -37,6 +38,7 @@ static void ConfigureConfiguration(ConfigurationManager configuration)
 {
     // appsettings.json is the base source, env vars can override everything for deployment.
     configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+    configuration.AddJsonFile("local.settings.json", optional: true, reloadOnChange: true);
     configuration.AddEnvironmentVariables();
 }
 
@@ -107,3 +109,5 @@ static void ConfigureListenFromRedirectUri(WebApplication app)
     if (!app.Urls.Contains(listenUrl, StringComparer.OrdinalIgnoreCase))
         app.Urls.Add(listenUrl);
 }
+
+

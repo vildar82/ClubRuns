@@ -79,12 +79,7 @@ CREATE TABLE IF NOT EXISTS legacy_stats (
     imported_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS admins (
-    telegram_user_id INTEGER PRIMARY KEY,
-    added_by_telegram_user_id INTEGER,
-    added_at INTEGER NOT NULL
-);
-";
+CREATE TABLE IF NOT EXISTS admins (`r`n    telegram_user_id INTEGER PRIMARY KEY,`r`n    added_by_telegram_user_id INTEGER,`r`n    added_at INTEGER NOT NULL`r`n);`r`n`r`nCREATE TABLE IF NOT EXISTS app_settings (`r`n    key TEXT PRIMARY KEY,`r`n    value TEXT NOT NULL,`r`n    updated_at INTEGER NOT NULL`r`n);`r`n";
 
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -575,6 +570,35 @@ ON CONFLICT(telegram_user_id) DO UPDATE SET
 
         return list;
     }
+    public async Task<string?> GetSettingAsync(string key, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT value FROM app_settings WHERE key = $key LIMIT 1;";
+        cmd.Parameters.AddWithValue("$key", key);
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value as string;
+    }
+
+    public async Task UpsertSettingAsync(string key, string value, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO app_settings (key, value, updated_at)
+VALUES ($key, $value, $updated_at)
+ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = excluded.updated_at;";
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$value", value);
+        cmd.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
     private static UserRecord MapUser(SqliteDataReader reader)
     {
         return new UserRecord(
@@ -586,5 +610,7 @@ ON CONFLICT(telegram_user_id) DO UPDATE SET
             DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)));
     }
 }
+
+
 
 

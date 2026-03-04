@@ -3,24 +3,32 @@ using Microsoft.Extensions.Options;
 
 namespace LisiSunrise;
 
-public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> options)
+public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> options, RuntimeSettingsService runtimeSettings)
 {
     private readonly AppOptions _options = options.Value;
 
-    public string BuildAuthorizeUrl(string state)
+    public async Task<string> BuildAuthorizeUrlAsync(string state, CancellationToken ct)
     {
+        var clientId = await runtimeSettings.GetStravaClientIdAsync(ct);
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            throw new InvalidOperationException("Strava ClientId is not configured. Use /setstrava or environment variables.");
+        }
+
         // Scope is configurable: read or read_all for private activities.
         var scope = _options.Strava.UseReadAllScope ? "activity:read_all" : "activity:read";
-        return $"https://www.strava.com/oauth/authorize?client_id={Uri.EscapeDataString(_options.Strava.ClientId)}&redirect_uri={Uri.EscapeDataString(_options.Strava.RedirectUri)}&response_type=code&approval_prompt=auto&scope={Uri.EscapeDataString(scope)}&state={Uri.EscapeDataString(state)}";
+        return $"https://www.strava.com/oauth/authorize?client_id={Uri.EscapeDataString(clientId)}&redirect_uri={Uri.EscapeDataString(_options.Strava.RedirectUri)}&response_type=code&approval_prompt=auto&scope={Uri.EscapeDataString(scope)}&state={Uri.EscapeDataString(state)}";
     }
 
     public async Task<TokenResponse> ExchangeCodeAsync(string code, CancellationToken ct)
     {
+        var creds = await GetCredentialsAsync(ct);
+
         // OAuth code exchange (authorization_code grant).
         var payload = new Dictionary<string, string>
         {
-            ["client_id"] = _options.Strava.ClientId,
-            ["client_secret"] = _options.Strava.ClientSecret,
+            ["client_id"] = creds.clientId,
+            ["client_secret"] = creds.clientSecret,
             ["code"] = code,
             ["grant_type"] = "authorization_code"
         };
@@ -34,11 +42,13 @@ public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> 
 
     public async Task<TokenResponse> RefreshTokenAsync(string refreshToken, CancellationToken ct)
     {
+        var creds = await GetCredentialsAsync(ct);
+
         // OAuth token refresh; Strava can return a rotated refresh token.
         var payload = new Dictionary<string, string>
         {
-            ["client_id"] = _options.Strava.ClientId,
-            ["client_secret"] = _options.Strava.ClientSecret,
+            ["client_id"] = creds.clientId,
+            ["client_secret"] = creds.clientSecret,
             ["refresh_token"] = refreshToken,
             ["grant_type"] = "refresh_token"
         };
@@ -62,6 +72,19 @@ public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> 
 
         var items = await response.Content.ReadFromJsonAsync<List<ActivityResponse>>(cancellationToken: ct);
         return items ?? [];
+    }
+
+    private async Task<(string clientId, string clientSecret)> GetCredentialsAsync(CancellationToken ct)
+    {
+        var clientId = await runtimeSettings.GetStravaClientIdAsync(ct);
+        var clientSecret = await runtimeSettings.GetStravaClientSecretAsync(ct);
+
+        if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
+        {
+            throw new InvalidOperationException("Strava credentials are not configured. Use /setstrava or environment variables.");
+        }
+
+        return (clientId, clientSecret);
     }
 }
 
