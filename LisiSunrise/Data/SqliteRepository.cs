@@ -146,6 +146,26 @@ WHERE telegram_user_id = $telegram_user_id;";
         return MapUser(reader);
     }
 
+
+    public async Task<bool> IsStravaConnectedByTelegramUserIdAsync(long telegramUserId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        // Lightweight existence check used by /help status line.
+        cmd.CommandText = @"
+SELECT 1
+FROM users u
+JOIN strava_auth s ON s.user_id = u.id
+WHERE u.telegram_user_id = $telegram_user_id
+LIMIT 1;";
+        cmd.Parameters.AddWithValue("$telegram_user_id", telegramUserId);
+
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is not null;
+    }
+
     public async Task<UserRecord?> GetUserByTelegramUsernameAsync(string telegramUsername, CancellationToken ct = default)
     {
         await using var connection = new SqliteConnection(_connectionString);

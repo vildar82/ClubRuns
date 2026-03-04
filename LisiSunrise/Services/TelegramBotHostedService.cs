@@ -74,10 +74,7 @@ public sealed class TelegramBotHostedService(
                     await HandleStartAsync(chatId, from, ct);
                     break;
                 case "/connect":
-                    await HandleConnectAsync(chatId, from.Id, ct);
-                    break;
-                case "/status":
-                    await HandleStatusAsync(chatId, telegramUserId, ct);
+                    await botClient.SendMessage(chatId, "Use /start to register and connect Strava.", cancellationToken: ct);
                     break;
                 case "/users":
                     await HandleUsersAsync(chatId, telegramUserId, ct);
@@ -168,38 +165,6 @@ public sealed class TelegramBotHostedService(
         }
     }
 
-    private async Task HandleConnectAsync(long chatId, long telegramUserId, CancellationToken ct)
-    {
-        var user = await repository.GetUserByTelegramIdAsync(telegramUserId, ct);
-        if (user is null)
-        {
-            await botClient.SendMessage(chatId, "Use /start first.", cancellationToken: ct);
-            return;
-        }
-
-        try
-        {
-            var url = await BuildConnectUrlAsync(telegramUserId, ct);
-            var keyboard = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("Connect Strava", url));
-            await botClient.SendMessage(chatId, "Connect your Strava account:", replyMarkup: keyboard, cancellationToken: ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to build Strava connect URL");
-            await botClient.SendMessage(chatId, "Strava credentials are not configured. Ask admin to run /setstrava.", cancellationToken: ct);
-        }
-    }
-
-    private async Task HandleStatusAsync(long chatId, long telegramUserId, CancellationToken ct)
-    {
-        if (!await EnsureAdminOrReplyAsync(chatId, telegramUserId, ct))
-        {
-            return;
-        }
-
-        var (total, connected) = await repository.GetUserStatsAsync(ct);
-        await botClient.SendMessage(chatId, $"Users: {total}\nConnected to Strava: {connected}", cancellationToken: ct);
-    }
 
     private async Task HandleUsersAsync(long chatId, long telegramUserId, CancellationToken ct)
     {
@@ -209,9 +174,11 @@ public sealed class TelegramBotHostedService(
         }
 
         var users = await repository.GetAllUsersWithAuthAsync(ct);
+        var connectedCount = users.Count(x => x.Auth is not null);
         var lines = users.Select(x => $"- {FormatUser(x.User)}: {(x.Auth is null ? "not connected" : "connected")}");
-        var text = "Users:\n" + string.Join('\n', lines);
+        var text = $"Users: {users.Count} (connected: {connectedCount})\n" + string.Join('\n', lines);
         await botClient.SendMessage(chatId, text, cancellationToken: ct);
+
     }
 
     private async Task HandleRunAsync(long chatId, long telegramUserId, string fullText, CancellationToken ct)
@@ -516,11 +483,13 @@ public sealed class TelegramBotHostedService(
 
     private async Task<string> BuildHelpTextAsync(long telegramUserId, CancellationToken ct)
     {
+        var isConnectedToStrava = await repository.IsStravaConnectedByTelegramUserIdAsync(telegramUserId, ct);
+        var stravaStatus = isConnectedToStrava ? "connected" : "not connected";
         var lines = new List<string>
         {
             "LisiSunrise bot commands:",
             "/start - register or update your profile",
-            "/connect - connect Strava account",
+            $"Strava status: {stravaStatus}",
             "/leaderboard - show combined leaderboard",
             "/myid - show your Telegram user id",
             "/help - show this help"
@@ -531,7 +500,6 @@ public sealed class TelegramBotHostedService(
         {
             lines.Add(string.Empty);
             lines.Add("Admin commands:");
-            lines.Add("/status - users summary");
             lines.Add("/users - list users and Strava status");
             lines.Add("/run or /job [YYYY-MM-DD] - run attendance check (optional target date)");
             lines.Add("/admins - list current admins");
@@ -574,6 +542,10 @@ public sealed class TelegramBotHostedService(
         return string.Join(Environment.NewLine, lines);
     }
 }
+
+
+
+
 
 
 

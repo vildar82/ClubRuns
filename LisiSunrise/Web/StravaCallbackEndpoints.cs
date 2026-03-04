@@ -63,9 +63,10 @@ public static class StravaCallbackEndpoints
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to complete Strava callback for user {TelegramUserId}", user.TelegramUserId);
-                await botClient.SendMessage(user.TelegramUserId, "Failed to connect Strava. Try /connect again.", cancellationToken: ct);
+                await botClient.SendMessage(user.TelegramUserId, "Failed to connect Strava. Try /start again.", cancellationToken: ct);
                 return Results.Problem("Failed to exchange token with Strava.");
             }
         });
     }
 }
+
