@@ -1,8 +1,6 @@
-using LisySunrise.Data;
-using LisySunrise.Config;
 using Microsoft.Extensions.Options;
 
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed class SchedulerService(
     ILogger<SchedulerService> logger,

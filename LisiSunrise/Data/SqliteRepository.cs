@@ -1,7 +1,6 @@
 using Microsoft.Data.Sqlite;
-using LisySunrise.Security;
 
-namespace LisySunrise.Data;
+namespace LisiSunrise;
 
 public sealed class SqliteRepository
 {

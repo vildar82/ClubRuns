@@ -1,6 +1,4 @@
-using LisySunrise.Data;
-
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed record AttendanceUserResult(
     UserRecord User,

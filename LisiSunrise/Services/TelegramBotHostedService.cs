@@ -1,8 +1,6 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
-using System.Collections.Concurrent;
-using LisySunrise.Config;
-using LisySunrise.Data;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
@@ -10,7 +8,7 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed class TelegramBotHostedService(
     ITelegramBotClient botClient,

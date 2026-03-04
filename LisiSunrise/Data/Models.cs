@@ -1,4 +1,4 @@
-namespace LisySunrise.Data;
+namespace LisiSunrise;
 
 // users table row
 public sealed record UserRecord(

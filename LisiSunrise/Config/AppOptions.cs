@@ -1,4 +1,4 @@
-namespace LisySunrise.Config;
+namespace LisiSunrise;
 
 public sealed class AppOptions
 {

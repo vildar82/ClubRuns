@@ -1,10 +1,8 @@
 using System.Globalization;
-using LisySunrise.Config;
-using LisySunrise.Data;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
 
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed class AttendanceJobService(
     SqliteRepository repository,

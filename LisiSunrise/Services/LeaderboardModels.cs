@@ -1,4 +1,4 @@
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed record LeaderboardEntry(
     string DisplayName,

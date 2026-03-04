@@ -1,4 +1,4 @@
-namespace LisySunrise.Data;
+namespace LisiSunrise;
 
 public sealed record LegacyStatUpsert(
     string DisplayName,

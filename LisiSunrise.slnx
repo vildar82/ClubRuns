@@ -2,5 +2,5 @@
   <Folder Name="/SolutionFolder/">
     <File Path=".gitignore" />
   </Folder>
-  <Project Path="LisySunrise/LisySunrise.csproj" />
+  <Project Path="LisiSunrise/LisiSunrise.csproj" />
 </Solution>

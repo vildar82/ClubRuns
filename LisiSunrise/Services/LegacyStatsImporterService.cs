@@ -1,7 +1,6 @@
 using System.Text.RegularExpressions;
-using LisySunrise.Data;
 
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed class LegacyStatsImporterService(SqliteRepository repository, ILogger<LegacyStatsImporterService> logger)
 {

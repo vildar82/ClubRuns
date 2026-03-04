@@ -1,4 +1,4 @@
-namespace LisySunrise.Security;
+namespace LisiSunrise;
 
 public interface ITokenProtector
 {

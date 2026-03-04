@@ -1,4 +1,4 @@
-namespace LisySunrise.Security;
+namespace LisiSunrise;
 
 public sealed class PlainTextTokenProtector : ITokenProtector
 {

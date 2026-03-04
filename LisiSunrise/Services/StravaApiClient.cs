@@ -1,9 +1,7 @@
-using System.Net.Http.Json;
 using System.Text.Json.Serialization;
-using LisySunrise.Config;
 using Microsoft.Extensions.Options;
 
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> options)
 {

@@ -4,18 +4,11 @@ Telegram bot + Strava Friday attendance auto-check.
 
 ## Implemented
 
-- `bot` mode: Telegram polling, OAuth callback endpoint (`/strava/callback`), and Friday 12:00 Asia/Tbilisi scheduler.
-- `job` mode: one-shot attendance collection and report publishing.
-- SQLite storage: `users`, `strava_auth`, `runs`, `attendance`, `oauth_states`.
-- Commands:
-  - `/start`
-  - `/connect`
-  - `/status` (admin)
-  - `/users` (admin)
-  - `/run` (admin)
+- Single runtime mode: `bot` (long-running process).
+- Telegram polling, OAuth callback endpoint (`/strava/callback`), and in-process scheduler.
+- SQLite storage: `users`, `strava_auth`, `runs`, `attendance`, `oauth_states`, `legacy_stats`.
 - Automatic Strava token refresh.
 - Plain-text token storage in SQLite (portable DB between users/machines).
-- Optional Telegram report target (group if configured, or manual user target in `job` mode).
 - Console + file logging.
 
 ## Bot Commands
@@ -62,23 +55,18 @@ Admin access is controlled by `Telegram.AdminTelegramUserIds`.
 3. Run bot mode:
 
 ```powershell
-dotnet run -- bot
+dotnet run
 ```
 
-4. Run one-shot job mode:
+## Legacy Import Format
 
-```powershell
-dotnet run -- job
-```
-
-5. Import manual historical leaderboard text into DB:
-
-```powershell
-dotnet run -- import-legacy .\legacy_stats.txt
-```
-
-You can use the sample file included in the repo:
+You can use the sample file in repo as a format reference:
 - `legacy_stats.example.txt`
+
+In Telegram:
+1. `/importlegacy`
+2. Send leaderboard text (one or multiple messages)
+3. `/importlegacydone`
 
 ## appsettings.json Reference
 
@@ -89,14 +77,14 @@ Below is what each property means and where to get it.
 - `Telegram.GroupChatId`  
   Optional default Telegram chat id for automatic report publishing (for example, a group id). If empty/null, automatic job publishing is skipped.
 - `Telegram.AdminTelegramUserIds`  
-  Telegram user ids allowed to run admin commands (`/status`, `/users`, `/run`). Use `getUpdates` to read your user id after sending a private message to the bot.
+  Telegram user ids allowed to run admin commands.
 
 - `Strava.ClientId`  
   Strava application client id. Get it from Strava developer settings: https://www.strava.com/settings/api
 - `Strava.ClientSecret`  
   Strava application client secret from the same Strava API app page.
 - `Strava.RedirectUri`  
-  OAuth callback URL handled by this app, for example `http://localhost:5099/strava/callback`. Must exactly match the Authorization Callback Domain/App settings in Strava.
+  OAuth callback URL handled by this app, for example `http://localhost:5099/strava/callback`. Must exactly match the callback configured in Strava app.
 - `Strava.UseReadAllScope`  
   `true` to request `activity:read_all` (can read private activities), `false` for `activity:read`.
 
@@ -129,31 +117,6 @@ Environment variable mapping uses double underscore, for example:
 - `Matching__RadiusKm`
 - `Telegram__AdminTelegramUserIds__0`
 - `Schedule__DayOfWeek`
-
-## Windows Task Scheduler (job mode)
-
-Create a Friday 12:00 task (Tbilisi timezone should be set at OS/task level):
-
-- Program/script: `dotnet`
-- Arguments: `run --project C:\dev\LisySunrise\LisySunrise\LisySunrise.csproj -- job`
-- Start in: `C:\dev\LisySunrise\LisySunrise`
-
-`job` mode behavior:
-- Always prints full report to console.
-- Prints current combined leaderboard to console.
-- Optionally asks for a Telegram destination (`@username` or numeric `chat id`) and sends the same report there.
-- `@username` works only for users already present in local DB (they must have used `/start` before).
-
-`import-legacy` mode behavior:
-- Reads leaderboard text file and parses participant rows.
-- Stores parsed baseline records in `legacy_stats` table (table is replaced on each import).
-- Intended for bootstrapping manual history before full automation.
-- These baseline records are included in `/leaderboard` and job leaderboard output.
-
-Recommended server flow:
-- Run only `bot` mode as a long-running process.
-- Trigger jobs via `/run` or scheduler.
-- Import legacy stats directly via Telegram commands (`/importlegacy` ... `/importlegacydone`).
 
 ## MVP Notes
 

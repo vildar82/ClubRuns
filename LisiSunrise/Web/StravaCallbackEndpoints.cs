@@ -1,8 +1,6 @@
-using LisySunrise.Data;
-using LisySunrise.Services;
 using Telegram.Bot;
 
-namespace LisySunrise.Web;
+namespace LisiSunrise;
 
 public static class StravaCallbackEndpoints
 {

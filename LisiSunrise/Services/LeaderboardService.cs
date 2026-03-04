@@ -1,7 +1,6 @@
 using System.Globalization;
-using LisySunrise.Data;
 
-namespace LisySunrise.Services;
+namespace LisiSunrise;
 
 public sealed class LeaderboardService(SqliteRepository repository)
 {
