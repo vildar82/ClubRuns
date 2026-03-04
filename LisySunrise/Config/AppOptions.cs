@@ -1,0 +1,48 @@
+namespace LisySunrise.Config;
+
+public sealed class AppOptions
+{
+    public TelegramOptions Telegram { get; init; } = new();
+    public StravaOptions Strava { get; init; } = new();
+    public MatchingOptions Matching { get; init; } = new();
+    public DatabaseOptions Database { get; init; } = new();
+    public LoggingOptions Logging { get; init; } = new();
+}
+
+public sealed class TelegramOptions
+{
+    public string BotToken { get; init; } = string.Empty;
+    public long GroupChatId { get; init; }
+    public long[] AdminTelegramUserIds { get; init; } = [];
+}
+
+public sealed class StravaOptions
+{
+    public string ClientId { get; init; } = string.Empty;
+    public string ClientSecret { get; init; } = string.Empty;
+    public string RedirectUri { get; init; } = string.Empty;
+    public bool UseReadAllScope { get; init; }
+}
+
+public sealed class MatchingOptions
+{
+    public double LisiStartLat { get; init; }
+    public double LisiStartLng { get; init; }
+    public double RadiusKm { get; init; }
+    public string WindowStartLocal { get; init; } = "06:00";
+    public string WindowEndLocal { get; init; } = "10:00";
+    public string TargetStartLocal { get; init; } = "08:00";
+    public string[] AllowedActivityTypes { get; init; } = ["Run", "TrailRun"];
+    public double? MinDistanceKm { get; init; }
+    public double? MaxDistanceKm { get; init; }
+}
+
+public sealed class DatabaseOptions
+{
+    public string Path { get; init; } = "lisi_sunrise.db";
+}
+
+public sealed class LoggingOptions
+{
+    public string LogPath { get; init; } = "logs/lisi-sunrise-.log";
+}

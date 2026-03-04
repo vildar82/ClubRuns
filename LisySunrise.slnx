@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/SolutionFolder/">
+    <File Path=".gitignore" />
+  </Folder>
+  <Project Path="LisySunrise/LisySunrise.csproj" />
+</Solution>
