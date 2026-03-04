@@ -2,8 +2,8 @@ using LisySunrise.Data;
 
 namespace LisySunrise.Services;
 
-public sealed class FridaySchedulerService(
-    ILogger<FridaySchedulerService> logger,
+public sealed class SchedulerService(
+    ILogger<SchedulerService> logger,
     AttendanceJobService attendanceJob,
     SqliteRepository repository) : BackgroundService
 {
@@ -13,17 +13,20 @@ public sealed class FridaySchedulerService(
     {
         // Lightweight in-process scheduler.
         // It checks every 30 seconds and runs only once for a given Friday date.
+        // This is not a separate business process; it only triggers the same AttendanceJobService
+        // while bot mode is alive.
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 var now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TbilisiTimeZone);
-                if (now.DayOfWeek == DayOfWeek.Friday && now.Hour == 12 && now.Minute <= 10)
+                if (now is {DayOfWeek: DayOfWeek.Friday, Hour: 12, Minute: <= 10})
                 {
                     var runDate = now.ToString("yyyy-MM-dd");
                     if (!await repository.RunExistsAsync(runDate, stoppingToken))
                     {
                         logger.LogInformation("Starting scheduled attendance run for {RunDate}", runDate);
+                        // Scheduled run and manual /run use the same job logic and matching rules.
                         await attendanceJob.RunAsync(now.Date, stoppingToken);
                     }
                 }

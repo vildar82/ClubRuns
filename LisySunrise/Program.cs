@@ -30,6 +30,8 @@ if (mode == "job")
     await repo.InitializeAsync();
 
     var job = host.Services.GetRequiredService<AttendanceJobService>();
+    // In console job mode we always print report to stdout first.
+    // Telegram sending is optional and chosen interactively after execution.
     var result = await job.RunAsync(targetLocalDate: null, publishToDefaultTarget: false);
 
     Console.WriteLine(job.BuildReportText(result));
@@ -55,13 +57,14 @@ if (mode == "job")
 
 var builder = WebApplication.CreateBuilder(args);
 // Long-running mode: Telegram polling + OAuth callback endpoint + Friday scheduler.
+// Scheduler invokes the same AttendanceJobService as job mode; only trigger style differs.
 ConfigureConfiguration(builder.Configuration);
 ConfigureSerilog(builder.Configuration);
 
 builder.Host.UseSerilog();
 RegisterCoreServices(builder.Services, builder.Configuration);
 builder.Services.AddHostedService<TelegramBotHostedService>();
-builder.Services.AddHostedService<FridaySchedulerService>();
+builder.Services.AddHostedService<SchedulerService>();
 builder.Services.AddTransient<AttendanceJobService>();
 
 var app = builder.Build();
@@ -90,9 +93,7 @@ static void RegisterCoreServices(IServiceCollection services, IConfiguration con
     {
         // Current implementation uses Windows DPAPI, so non-Windows runtime is blocked explicitly.
         if (!OperatingSystem.IsWindows())
-        {
             throw new PlatformNotSupportedException("Windows DPAPI token protection requires Windows runtime.");
-        }
 
         return new WindowsDpapiTokenProtector();
     });
@@ -102,9 +103,7 @@ static void RegisterCoreServices(IServiceCollection services, IConfiguration con
         var options = sp.GetRequiredService<IOptions<AppOptions>>().Value;
         var path = options.Database.Path;
         if (!Path.IsPathRooted(path))
-        {
             path = Path.Combine(AppContext.BaseDirectory, path);
-        }
 
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(dir))
@@ -124,9 +123,7 @@ static void RegisterCoreServices(IServiceCollection services, IConfiguration con
     {
         var options = sp.GetRequiredService<IOptions<AppOptions>>().Value;
         if (string.IsNullOrWhiteSpace(options.Telegram.BotToken))
-        {
             throw new InvalidOperationException("Telegram bot token is missing.");
-        }
 
         return new TelegramBotClient(options.Telegram.BotToken);
     });
@@ -137,15 +134,11 @@ static void ConfigureSerilog(IConfiguration configuration)
     // Log file path can be relative in config; convert to absolute path near app binaries.
     var logPath = configuration["Logging:LogPath"] ?? "logs/lisi-sunrise-.log";
     if (!Path.IsPathRooted(logPath))
-    {
         logPath = Path.Combine(AppContext.BaseDirectory, logPath);
-    }
 
     var logDir = Path.GetDirectoryName(logPath);
     if (!string.IsNullOrWhiteSpace(logDir))
-    {
         Directory.CreateDirectory(logDir);
-    }
 
     Log.Logger = new LoggerConfiguration()
         .ReadFrom.Configuration(configuration)
@@ -159,30 +152,22 @@ static void ConfigureListenFromRedirectUri(WebApplication app)
 {
     var options = app.Services.GetRequiredService<IOptions<AppOptions>>().Value;
     if (!Uri.TryCreate(options.Strava.RedirectUri, UriKind.Absolute, out var uri))
-    {
         return;
-    }
 
     // Reuse host/port from configured redirect URI so local OAuth callback can be received.
     var listenUrl = $"{uri.Scheme}://{uri.Host}:{uri.Port}";
     if (!app.Urls.Contains(listenUrl, StringComparer.OrdinalIgnoreCase))
-    {
         app.Urls.Add(listenUrl);
-    }
 }
 
 static async Task<long?> ResolveChatIdAsync(string target, SqliteRepository repo)
 {
     if (long.TryParse(target, out var numericChatId))
-    {
         return numericChatId;
-    }
 
     var username = target.TrimStart('@');
     if (string.IsNullOrWhiteSpace(username))
-    {
         return null;
-    }
 
     var user = await repo.GetUserByTelegramUsernameAsync(username);
     return user?.TelegramUserId;

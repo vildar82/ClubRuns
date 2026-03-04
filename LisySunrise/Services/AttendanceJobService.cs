@@ -16,9 +16,13 @@ public sealed class AttendanceJobService(
     private readonly AppOptions _options = options.Value;
     private static readonly TimeZoneInfo TbilisiTimeZone = ResolveTbilisiTimeZone();
 
+    // Default execution path used in bot mode and /run command:
+    // run job + publish to configured default chat (if provided).
     public Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate = null, CancellationToken ct = default) =>
         RunAsync(targetLocalDate, publishToDefaultTarget: true, ct);
 
+    // Explicit execution path used by console "job" mode:
+    // run job only, then caller decides where to print/send report.
     public async Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate, bool publishToDefaultTarget, CancellationToken ct = default)
     {
         // Build the run date in Tbilisi local time because attendance is local-event based.

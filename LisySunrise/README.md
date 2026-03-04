@@ -18,6 +18,21 @@ Telegram bot + Strava Friday attendance auto-check.
 - Optional Telegram report target (group if configured, or manual user target in `job` mode).
 - Console + file logging.
 
+## Bot Commands
+
+- `/start`  
+  Registers or updates the Telegram user in local DB and returns a `Connect Strava` button.
+- `/connect`  
+  Generates a fresh Strava OAuth link and sends it to the user.
+- `/status` (admin only)  
+  Shows total registered users and how many have Strava connected.
+- `/users` (admin only)  
+  Prints a short list of users with connection status (`connected` / `not connected`).
+- `/run` (admin only)  
+  Triggers attendance job immediately and returns summary in chat.
+
+Admin access is controlled by `Telegram.AdminTelegramUserIds`.
+
 ## Quick Start
 
 1. Configure `appsettings.json` or environment variables:
