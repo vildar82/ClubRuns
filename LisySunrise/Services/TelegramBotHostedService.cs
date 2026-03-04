@@ -23,6 +23,7 @@ public sealed class TelegramBotHostedService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Validate bot connectivity at startup and print account identity in logs.
         var me = await botClient.GetMe(stoppingToken);
         logger.LogInformation("Telegram bot started as @{Username}", me.Username);
 
@@ -38,6 +39,7 @@ public sealed class TelegramBotHostedService(
 
     private Task HandleErrorAsync(ITelegramBotClient _, Exception exception, CancellationToken ct)
     {
+        // Polling should keep running even if one update handling cycle fails.
         logger.LogError(exception, "Telegram polling error");
         return Task.CompletedTask;
     }
@@ -96,6 +98,7 @@ public sealed class TelegramBotHostedService(
 
     private async Task HandleConnectAsync(long chatId, long telegramUserId, CancellationToken ct)
     {
+        // Require /start first because it creates a local user record used by callback mapping.
         var user = await repository.GetUserByTelegramIdAsync(telegramUserId, ct);
         if (user is null)
         {
@@ -110,6 +113,7 @@ public sealed class TelegramBotHostedService(
 
     private async Task HandleStatusAsync(long chatId, long telegramUserId, CancellationToken ct)
     {
+        // Admin-only informational command.
         if (!IsAdmin(telegramUserId))
         {
             return;
@@ -121,6 +125,7 @@ public sealed class TelegramBotHostedService(
 
     private async Task HandleUsersAsync(long chatId, long telegramUserId, CancellationToken ct)
     {
+        // Admin-only users snapshot for quick operational checks.
         if (!IsAdmin(telegramUserId))
         {
             return;
@@ -134,6 +139,7 @@ public sealed class TelegramBotHostedService(
 
     private async Task HandleRunAsync(long chatId, long telegramUserId, CancellationToken ct)
     {
+        // Admin-only manual trigger for testing or ad-hoc reruns.
         if (!IsAdmin(telegramUserId))
         {
             return;
@@ -160,6 +166,7 @@ public sealed class TelegramBotHostedService(
 
     private static string CreateStateToken(long telegramUserId)
     {
+        // Include user id + random nonce + timestamp, then URL-safe base64 encode.
         Span<byte> bytes = stackalloc byte[24];
         RandomNumberGenerator.Fill(bytes);
         var random = Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").Replace("=", string.Empty);
@@ -169,6 +176,7 @@ public sealed class TelegramBotHostedService(
 
     private static string FormatUser(UserRecord user)
     {
+        // Prefer @username in reports; fallback to display name or telegram numeric id.
         if (!string.IsNullOrWhiteSpace(user.TelegramUsername))
         {
             return $"@{user.TelegramUsername}";

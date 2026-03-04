@@ -1,5 +1,6 @@
 namespace LisySunrise.Data;
 
+// users table row
 public sealed record UserRecord(
     long Id,
     long TelegramUserId,
@@ -8,6 +9,7 @@ public sealed record UserRecord(
     string? LastName,
     DateTimeOffset CreatedAt);
 
+// strava_auth table row
 public sealed record StravaAuthRecord(
     long UserId,
     long AthleteId,
@@ -17,10 +19,13 @@ public sealed record StravaAuthRecord(
     string Scope,
     DateTimeOffset LastAuthAt);
 
+// denormalized user + optional auth view used in app services
 public sealed record UserWithAuth(UserRecord User, StravaAuthRecord? Auth);
 
+// oauth_states table row
 public sealed record OAuthStateRecord(string State, long TelegramUserId, DateTimeOffset CreatedAt);
 
+// attendance upsert payload for one user/date
 public sealed record AttendanceUpsert(
     string RunDate,
     long UserId,
@@ -31,6 +36,7 @@ public sealed record AttendanceUpsert(
     double? DistanceKm,
     string MatchedReason);
 
+// optional read model for future reporting queries
 public sealed record AttendanceView(
     UserRecord User,
     long? ActivityId,

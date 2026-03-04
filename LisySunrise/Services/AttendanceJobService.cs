@@ -18,6 +18,7 @@ public sealed class AttendanceJobService(
 
     public async Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate = null, CancellationToken ct = default)
     {
+        // Build the run date in Tbilisi local time because attendance is local-event based.
         var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TbilisiTimeZone);
         var runDate = (targetLocalDate ?? nowLocal.Date).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
@@ -29,6 +30,7 @@ public sealed class AttendanceJobService(
         var windowStart = ParseLocalTime(_options.Matching.WindowStartLocal);
         var windowEnd = ParseLocalTime(_options.Matching.WindowEndLocal);
         var targetStart = ParseLocalTime(_options.Matching.TargetStartLocal);
+        // Strava activities API filter uses UNIX timestamps.
         var after = ToUnixInTbilisi(DateTime.ParseExact(runDate, "yyyy-MM-dd", CultureInfo.InvariantCulture).Add(windowStart));
         var before = ToUnixInTbilisi(DateTime.ParseExact(runDate, "yyyy-MM-dd", CultureInfo.InvariantCulture).Add(windowEnd));
 
@@ -39,6 +41,7 @@ public sealed class AttendanceJobService(
 
             if (userWithAuth.Auth is null)
             {
+                // User exists in Telegram but has not connected Strava yet.
                 var item = new AttendanceUserResult(user, false, null, "No Strava connection", false, null);
                 notFound.Add(item);
                 await repository.UpsertAttendanceAsync(new AttendanceUpsert(runDate, user.Id, null, null, null, null, null, item.Reason), ct);
@@ -68,6 +71,7 @@ public sealed class AttendanceJobService(
 
                 if (best is null)
                 {
+                    // No activity passed filters (time/radius/type/distance).
                     var item = new AttendanceUserResult(user, false, null, "No matching activity in configured window/radius", false, null);
                     notFound.Add(item);
                     await repository.UpsertAttendanceAsync(new AttendanceUpsert(runDate, user.Id, null, null, null, null, null, item.Reason), ct);
@@ -108,6 +112,7 @@ public sealed class AttendanceJobService(
         }
 
         await repository.SaveRunAsync(runDate, users.Count, found.Count, ct);
+        // Report is published after DB write so audit history is always present.
         var result = new AttendanceRunResult(runDate, found, notFound, errors);
         await PublishReportAsync(result, ct);
         return result;
@@ -177,12 +182,14 @@ public sealed class AttendanceJobService(
 
     private static long ToUnixInTbilisi(DateTime localTime)
     {
+        // Convert local event time to unix seconds with explicit timezone offset.
         var offset = new DateTimeOffset(localTime, TbilisiTimeZone.GetUtcOffset(localTime));
         return offset.ToUnixTimeSeconds();
     }
 
     private static DateTime ParseStravaLocal(string value)
     {
+        // Strava returns local datetime text; parse defensively for format variations.
         if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var dt))
         {
             return dt;
@@ -193,6 +200,7 @@ public sealed class AttendanceJobService(
 
     private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
     {
+        // Great-circle distance on Earth between activity start and Lisi target point.
         const double earthRadiusKm = 6371.0;
         var dLat = DegToRad(lat2 - lat1);
         var dLon = DegToRad(lon2 - lon1);
@@ -218,6 +226,7 @@ public sealed class AttendanceJobService(
 
     private static TimeZoneInfo ResolveTbilisiTimeZone()
     {
+        // Support both Linux and Windows timezone identifiers.
         foreach (var id in new[] { "Asia/Tbilisi", "Georgian Standard Time" })
         {
             try

@@ -2,6 +2,7 @@ namespace LisySunrise.Config;
 
 public sealed class AppOptions
 {
+    // Root strongly-typed configuration object bound from appsettings + env vars.
     public TelegramOptions Telegram { get; init; } = new();
     public StravaOptions Strava { get; init; } = new();
     public MatchingOptions Matching { get; init; } = new();
@@ -26,6 +27,7 @@ public sealed class StravaOptions
 
 public sealed class MatchingOptions
 {
+    // Lisi start reference point and filters for attendance matching.
     public double LisiStartLat { get; init; }
     public double LisiStartLng { get; init; }
     public double RadiusKm { get; init; }

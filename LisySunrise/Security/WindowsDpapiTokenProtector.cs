@@ -17,6 +17,7 @@ public sealed class WindowsDpapiTokenProtector : ITokenProtector
         }
 
         var bytes = Encoding.UTF8.GetBytes(plainText);
+        // CurrentUser scope ties encrypted data to Windows account running the bot.
         var protectedBytes = ProtectedData.Protect(bytes, optionalEntropy: null, DataProtectionScope.CurrentUser);
         return Prefix + Convert.ToBase64String(protectedBytes);
     }

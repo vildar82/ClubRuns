@@ -29,6 +29,7 @@ public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> 
 
         using var content = new FormUrlEncodedContent(payload);
         using var response = await httpClient.PostAsync("https://www.strava.com/oauth/token", content, ct);
+        // Throwing here keeps error flow explicit for caller-level per-user handling.
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken: ct))!;
     }
@@ -68,6 +69,7 @@ public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> 
 
 public sealed class TokenResponse
 {
+    // DTOs map Strava JSON directly and are used by repository/job services.
     [JsonPropertyName("token_type")] public string TokenType { get; set; } = string.Empty;
     [JsonPropertyName("access_token")] public string AccessToken { get; set; } = string.Empty;
     [JsonPropertyName("refresh_token")] public string RefreshToken { get; set; } = string.Empty;

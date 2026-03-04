@@ -10,6 +10,7 @@ public sealed class SqliteRepository
 
     public SqliteRepository(string dbPath, ITokenProtector tokenProtector)
     {
+        // Single-file SQLite database path is resolved in Program.cs.
         _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
         _tokenProtector = tokenProtector;
     }
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS oauth_states (
 
         await using (var upsert = connection.CreateCommand())
         {
+            // Keep created_at from initial insert; update profile fields on every /start.
             upsert.CommandText = @"
 INSERT INTO users (telegram_user_id, telegram_username, first_name, last_name, created_at)
 VALUES ($telegram_user_id, $telegram_username, $first_name, $last_name, $created_at)
@@ -151,6 +153,7 @@ ORDER BY u.id;";
             StravaAuthRecord? auth = null;
             if (!reader.IsDBNull(6))
             {
+                // Decrypt tokens only when loaded for runtime API calls.
                 auth = new StravaAuthRecord(
                     reader.GetInt64(6),
                     reader.GetInt64(7),
@@ -203,6 +206,7 @@ ON CONFLICT(user_id) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
+        // state row is overwritten if same key appears; this keeps operation idempotent.
         cmd.CommandText = @"
 INSERT INTO oauth_states (state, telegram_user_id, created_at)
 VALUES ($state, $telegram_user_id, $created_at)
@@ -222,6 +226,7 @@ ON CONFLICT(state) DO UPDATE SET
 
         OAuthStateRecord? result = null;
 
+        // Read+delete happens in one transaction to enforce one-time state usage.
         await using (var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct))
         {
             await using (var select = connection.CreateCommand())
@@ -258,6 +263,7 @@ ON CONFLICT(state) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
+        // Re-running same date updates counters and generated timestamp.
         cmd.CommandText = @"
 INSERT INTO runs (date, generated_at, total_users, found_count)
 VALUES ($date, $generated_at, $total_users, $found_count)
@@ -278,6 +284,7 @@ ON CONFLICT(date) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
+        // One attendance row per (run_date, user_id).
         cmd.CommandText = @"
 INSERT INTO attendance (run_date, user_id, activity_id, start_date_local, start_lat, start_lng, distance_km, matched_reason)
 VALUES ($run_date, $user_id, $activity_id, $start_date_local, $start_lat, $start_lng, $distance_km, $matched_reason)
@@ -320,6 +327,7 @@ ON CONFLICT(run_date, user_id) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
+        // Compact stats query used by /status command.
         cmd.CommandText = @"
 SELECT
   (SELECT COUNT(*) FROM users),

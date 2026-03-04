@@ -8,6 +8,7 @@ public static class StravaCallbackEndpoints
 {
     public static void MapStravaEndpoints(this WebApplication app)
     {
+        // OAuth redirect endpoint called by Strava after user approves app access.
         app.MapGet("/strava/callback", async (
             string? code,
             string? state,
@@ -22,6 +23,7 @@ public static class StravaCallbackEndpoints
 
             if (!string.IsNullOrWhiteSpace(error))
             {
+                // User denied or Strava returned an OAuth error.
                 return Results.Text($"Strava authorization failed: {error}", "text/plain");
             }
 
@@ -40,6 +42,7 @@ public static class StravaCallbackEndpoints
             var user = await repository.GetUserByTelegramIdAsync(stateRecord.TelegramUserId, ct);
             if (user is null)
             {
+                // If user row is missing, callback cannot be linked to Telegram identity.
                 return Results.BadRequest("User not found.");
             }
 

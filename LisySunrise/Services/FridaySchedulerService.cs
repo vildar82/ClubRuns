@@ -11,6 +11,8 @@ public sealed class FridaySchedulerService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Lightweight in-process scheduler.
+        // It checks every 30 seconds and runs only once for a given Friday date.
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -37,6 +39,7 @@ public sealed class FridaySchedulerService(
 
     private static TimeZoneInfo ResolveTbilisiTimeZone()
     {
+        // Support both Linux and Windows timezone identifiers.
         foreach (var id in new[] { "Asia/Tbilisi", "Georgian Standard Time" })
         {
             try
