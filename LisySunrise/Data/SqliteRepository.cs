@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS oauth_states (
     telegram_user_id INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS legacy_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    display_name TEXT NOT NULL,
+    telegram_username TEXT,
+    runs_count INTEGER NOT NULL,
+    sun_count INTEGER NOT NULL,
+    nosun_count INTEGER NOT NULL,
+    source_line TEXT NOT NULL,
+    imported_at INTEGER NOT NULL
+);
 ";
 
         await using var command = connection.CreateCommand();
@@ -358,6 +369,40 @@ SELECT
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
         return (reader.GetInt32(0), reader.GetInt32(1));
+    }
+
+    public async Task ReplaceLegacyStatsAsync(IReadOnlyCollection<LegacyStatUpsert> stats, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct);
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = tx;
+            delete.CommandText = "DELETE FROM legacy_stats;";
+            await delete.ExecuteNonQueryAsync(ct);
+        }
+
+        foreach (var item in stats)
+        {
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = tx;
+            insert.CommandText = @"
+INSERT INTO legacy_stats (display_name, telegram_username, runs_count, sun_count, nosun_count, source_line, imported_at)
+VALUES ($display_name, $telegram_username, $runs_count, $sun_count, $nosun_count, $source_line, $imported_at);";
+            insert.Parameters.AddWithValue("$display_name", item.DisplayName);
+            insert.Parameters.AddWithValue("$telegram_username", (object?)item.TelegramUsername ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$runs_count", item.RunsCount);
+            insert.Parameters.AddWithValue("$sun_count", item.SunCount);
+            insert.Parameters.AddWithValue("$nosun_count", item.NoSunCount);
+            insert.Parameters.AddWithValue("$source_line", item.SourceLine);
+            insert.Parameters.AddWithValue("$imported_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
     }
 
     private static UserRecord MapUser(SqliteDataReader reader)

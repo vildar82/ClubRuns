@@ -50,14 +50,23 @@ Admin access is controlled by `Telegram.AdminTelegramUserIds`.
 3. Run bot mode:
 
 ```powershell
-dotnet run -- bot
+dotnet run --bot
 ```
 
 4. Run one-shot job mode:
 
 ```powershell
-dotnet run -- job
+dotnet run --job
 ```
+
+5. Import manual historical leaderboard text into DB:
+
+```powershell
+dotnet run --import-legacy .\legacy_stats.txt
+```
+
+You can use the sample file included in the repo:
+- `legacy_stats.example.txt`
 
 ## appsettings.json Reference
 
@@ -121,6 +130,11 @@ Create a Friday 12:00 task (Tbilisi timezone should be set at OS/task level):
 - Always prints full report to console.
 - Optionally asks for a Telegram destination (`@username` or numeric `chat id`) and sends the same report there.
 - `@username` works only for users already present in local DB (they must have used `/start` before).
+
+`import-legacy` mode behavior:
+- Reads leaderboard text file and parses participant rows.
+- Stores parsed baseline records in `legacy_stats` table (table is replaced on each import).
+- Intended for bootstrapping manual history before full automation.
 
 ## MVP Notes
 

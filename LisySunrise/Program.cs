@@ -9,6 +9,39 @@ using Telegram.Bot;
 
 var mode = args.FirstOrDefault()?.Trim().ToLowerInvariant() ?? "bot";
 
+if (mode == "import-legacy")
+{
+    // Import manually maintained leaderboard text into legacy_stats table.
+    var filePath = args.Length >= 2 ? args[1] : "legacy_stats.txt";
+    if (!File.Exists(filePath))
+    {
+        Console.WriteLine($"File not found: {filePath}");
+        return;
+    }
+
+    var hostBuilder = Host.CreateApplicationBuilder(args);
+    ConfigureConfiguration(hostBuilder.Configuration);
+    ConfigureSerilog(hostBuilder.Configuration);
+    hostBuilder.Services.AddLogging(logging =>
+    {
+        logging.ClearProviders();
+        logging.AddSerilog();
+    });
+
+    RegisterCoreServices(hostBuilder.Services, hostBuilder.Configuration);
+    hostBuilder.Services.AddTransient<LegacyStatsImporterService>();
+
+    using var host = hostBuilder.Build();
+    var repo = host.Services.GetRequiredService<SqliteRepository>();
+    await repo.InitializeAsync();
+
+    var importer = host.Services.GetRequiredService<LegacyStatsImporterService>();
+    var text = await File.ReadAllTextAsync(filePath);
+    var (imported, skipped) = await importer.ImportAsync(text);
+    Console.WriteLine($"Legacy stats imported: {imported}, skipped lines: {skipped}");
+    return;
+}
+
 if (mode == "job")
 {
     // One-shot mode: run attendance collection once and exit.
