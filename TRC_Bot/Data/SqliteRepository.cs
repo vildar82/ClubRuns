@@ -9,7 +9,6 @@ public sealed class SqliteRepository
 
     public SqliteRepository(string dbPath, ITokenProtector tokenProtector)
     {
-        // Single-file SQLite database path is resolved in Program.cs.
         _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
         _tokenProtector = tokenProtector;
     }
@@ -19,7 +18,6 @@ public sealed class SqliteRepository
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(ct);
 
-        // Minimal schema for MVP. Attendance and runs are historical tables.
         var sql = @"
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,6 +88,63 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS club_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    is_active INTEGER NOT NULL,
+    day_of_week INTEGER NOT NULL,
+    hour INTEGER NOT NULL,
+    minute_from INTEGER NOT NULL,
+    minute_to INTEGER NOT NULL,
+    start_lat REAL NOT NULL,
+    start_lng REAL NOT NULL,
+    radius_km REAL NOT NULL,
+    window_start_local TEXT NOT NULL,
+    window_end_local TEXT NOT NULL,
+    target_start_local TEXT NOT NULL,
+    allowed_activity_types TEXT NOT NULL,
+    min_distance_km REAL,
+    max_distance_km REAL,
+    report_chat_id INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS club_run_members (
+    club_run_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (club_run_id, user_id),
+    FOREIGN KEY(club_run_id) REFERENCES club_runs(id),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS club_run_reports (
+    club_run_id INTEGER NOT NULL,
+    run_date TEXT NOT NULL,
+    generated_at INTEGER NOT NULL,
+    total_users INTEGER NOT NULL,
+    found_count INTEGER NOT NULL,
+    PRIMARY KEY (club_run_id, run_date),
+    FOREIGN KEY(club_run_id) REFERENCES club_runs(id)
+);
+
+CREATE TABLE IF NOT EXISTS club_run_attendance (
+    club_run_id INTEGER NOT NULL,
+    run_date TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    activity_id INTEGER,
+    start_date_local INTEGER,
+    start_lat REAL,
+    start_lng REAL,
+    distance_km REAL,
+    matched_reason TEXT NOT NULL,
+    PRIMARY KEY (club_run_id, run_date, user_id),
+    FOREIGN KEY(club_run_id, run_date) REFERENCES club_run_reports(club_run_id, run_date),
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
 ";
 
         await using var command = connection.CreateCommand();
@@ -104,23 +159,20 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-        await using (var upsert = connection.CreateCommand())
-        {
-            // Keep created_at from initial insert; update profile fields on every /start.
-            upsert.CommandText = @"
+        await using var upsert = connection.CreateCommand();
+        upsert.CommandText = @"
 INSERT INTO users (telegram_user_id, telegram_username, first_name, last_name, created_at)
 VALUES ($telegram_user_id, $telegram_username, $first_name, $last_name, $created_at)
 ON CONFLICT(telegram_user_id) DO UPDATE SET
     telegram_username = excluded.telegram_username,
     first_name = excluded.first_name,
     last_name = excluded.last_name;";
-            upsert.Parameters.AddWithValue("$telegram_user_id", telegramUserId);
-            upsert.Parameters.AddWithValue("$telegram_username", (object?)username ?? DBNull.Value);
-            upsert.Parameters.AddWithValue("$first_name", (object?)firstName ?? DBNull.Value);
-            upsert.Parameters.AddWithValue("$last_name", (object?)lastName ?? DBNull.Value);
-            upsert.Parameters.AddWithValue("$created_at", now);
-            await upsert.ExecuteNonQueryAsync(ct);
-        }
+        upsert.Parameters.AddWithValue("$telegram_user_id", telegramUserId);
+        upsert.Parameters.AddWithValue("$telegram_username", (object?)username ?? DBNull.Value);
+        upsert.Parameters.AddWithValue("$first_name", (object?)firstName ?? DBNull.Value);
+        upsert.Parameters.AddWithValue("$last_name", (object?)lastName ?? DBNull.Value);
+        upsert.Parameters.AddWithValue("$created_at", now);
+        await upsert.ExecuteNonQueryAsync(ct);
 
         return (await GetUserByTelegramIdAsync(telegramUserId, ct))!;
     }
@@ -146,6 +198,26 @@ WHERE telegram_user_id = $telegram_user_id;";
         return MapUser(reader);
     }
 
+    public async Task<UserRecord?> GetUserByIdAsync(long userId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT id, telegram_user_id, telegram_username, first_name, last_name, created_at
+FROM users
+WHERE id = $id;";
+        cmd.Parameters.AddWithValue("$id", userId);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return null;
+        }
+
+        return MapUser(reader);
+    }
 
     public async Task<bool> IsStravaConnectedByTelegramUserIdAsync(long telegramUserId, CancellationToken ct = default)
     {
@@ -153,7 +225,6 @@ WHERE telegram_user_id = $telegram_user_id;";
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
-        // Lightweight existence check used by /help status line.
         cmd.CommandText = @"
 SELECT 1
 FROM users u
@@ -202,44 +273,34 @@ FROM users u
 LEFT JOIN strava_auth s ON s.user_id = u.id
 ORDER BY u.id;";
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        var list = new List<UserWithAuth>();
-        while (await reader.ReadAsync(ct))
-        {
-            var user = new UserRecord(
-                reader.GetInt64(0),
-                reader.GetInt64(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)));
+        return await ReadUsersWithAuthAsync(cmd, ct);
+    }
 
-            StravaAuthRecord? auth = null;
-            if (!reader.IsDBNull(6))
-            {
-                // Decrypt tokens only when loaded for runtime API calls.
-                auth = new StravaAuthRecord(
-                    reader.GetInt64(6),
-                    reader.GetInt64(7),
-                    _tokenProtector.Unprotect(reader.GetString(8)),
-                    _tokenProtector.Unprotect(reader.GetString(9)),
-                    reader.GetInt64(10),
-                    reader.GetString(11),
-                    DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(12)));
-            }
+    public async Task<List<UserWithAuth>> GetClubRunMembersWithAuthAsync(long clubRunId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
 
-            list.Add(new UserWithAuth(user, auth));
-        }
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT
+    u.id, u.telegram_user_id, u.telegram_username, u.first_name, u.last_name, u.created_at,
+    s.user_id, s.athlete_id, s.access_token, s.refresh_token, s.expires_at, s.scope, s.last_auth_at
+FROM club_run_members m
+JOIN users u ON u.id = m.user_id
+LEFT JOIN strava_auth s ON s.user_id = u.id
+WHERE m.club_run_id = $club_run_id
+ORDER BY u.telegram_username, u.first_name, u.last_name, u.id;";
+        cmd.Parameters.AddWithValue("$club_run_id", clubRunId);
 
-        return list;
+        return await ReadUsersWithAuthAsync(cmd, ct);
     }
 
     public async Task SaveStravaAuthAsync(long userId, long athleteId, string accessToken, string refreshToken, long expiresAt, string scope, CancellationToken ct = default)
     {
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(ct);
-        
-        // Tokens are encrypted before writing to SQLite.
+
         var protectedAccessToken = _tokenProtector.Protect(accessToken);
         var protectedRefreshToken = _tokenProtector.Protect(refreshToken);
 
@@ -270,7 +331,6 @@ ON CONFLICT(user_id) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
-        // state row is overwritten if same key appears; this keeps operation idempotent.
         cmd.CommandText = @"
 INSERT INTO oauth_states (state, telegram_user_id, created_at)
 VALUES ($state, $telegram_user_id, $created_at)
@@ -290,7 +350,6 @@ ON CONFLICT(state) DO UPDATE SET
 
         OAuthStateRecord? result = null;
 
-        // Read+delete happens in one transaction to enforce one-time state usage.
         await using (var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct))
         {
             await using (var select = connection.CreateCommand())
@@ -327,7 +386,6 @@ ON CONFLICT(state) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
-        // Re-running same date updates counters and generated timestamp.
         cmd.CommandText = @"
 INSERT INTO runs (date, generated_at, total_users, found_count)
 VALUES ($date, $generated_at, $total_users, $found_count)
@@ -348,7 +406,6 @@ ON CONFLICT(date) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
-        // One attendance row per (run_date, user_id).
         cmd.CommandText = @"
 INSERT INTO attendance (run_date, user_id, activity_id, start_date_local, start_lat, start_lng, distance_km, matched_reason)
 VALUES ($run_date, $user_id, $activity_id, $start_date_local, $start_lat, $start_lng, $distance_km, $matched_reason)
@@ -359,7 +416,6 @@ ON CONFLICT(run_date, user_id) DO UPDATE SET
     start_lng = excluded.start_lng,
     distance_km = excluded.distance_km,
     matched_reason = excluded.matched_reason;";
-
         cmd.Parameters.AddWithValue("$run_date", attendance.RunDate);
         cmd.Parameters.AddWithValue("$user_id", attendance.UserId);
         cmd.Parameters.AddWithValue("$activity_id", (object?)attendance.ActivityId ?? DBNull.Value);
@@ -368,7 +424,6 @@ ON CONFLICT(run_date, user_id) DO UPDATE SET
         cmd.Parameters.AddWithValue("$start_lng", (object?)attendance.StartLng ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$distance_km", (object?)attendance.DistanceKm ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$matched_reason", attendance.MatchedReason);
-
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -380,7 +435,6 @@ ON CONFLICT(run_date, user_id) DO UPDATE SET
         await using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT 1 FROM runs WHERE date = $date LIMIT 1;";
         cmd.Parameters.AddWithValue("$date", runDate);
-
         var value = await cmd.ExecuteScalarAsync(ct);
         return value is not null;
     }
@@ -391,7 +445,6 @@ ON CONFLICT(run_date, user_id) DO UPDATE SET
         await connection.OpenAsync(ct);
 
         await using var cmd = connection.CreateCommand();
-        // Compact stats query used by /status command.
         cmd.CommandText = @"
 SELECT
   (SELECT COUNT(*) FROM users),
@@ -536,6 +589,7 @@ GROUP BY u.telegram_user_id, u.telegram_username, u.first_name, u.last_name;";
 
         return (totalRuns, latestAttendance, highestAttendance, highestDate);
     }
+
     public async Task EnsureAdminsAsync(IEnumerable<long> telegramUserIds, CancellationToken ct = default)
     {
         await using var connection = new SqliteConnection(_connectionString);
@@ -601,6 +655,7 @@ ON CONFLICT(telegram_user_id) DO UPDATE SET
 
         return list;
     }
+
     public async Task<string?> GetSettingAsync(string key, CancellationToken ct = default)
     {
         await using var connection = new SqliteConnection(_connectionString);
@@ -630,6 +685,295 @@ ON CONFLICT(key) DO UPDATE SET
         cmd.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         await cmd.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task<List<ClubRunRecord>> GetClubRunsAsync(bool activeOnly, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT id, name, slug, is_active, day_of_week, hour, minute_from, minute_to,
+       start_lat, start_lng, radius_km, window_start_local, window_end_local, target_start_local,
+       allowed_activity_types, min_distance_km, max_distance_km, report_chat_id, created_at, updated_at
+FROM club_runs
+WHERE $active_only = 0 OR is_active = 1
+ORDER BY day_of_week, hour, minute_from, name;";
+        cmd.Parameters.AddWithValue("$active_only", activeOnly ? 1 : 0);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<ClubRunRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(MapClubRun(reader));
+        }
+
+        return list;
+    }
+
+    public async Task<List<ClubRunRecord>> GetClubRunsForDayAsync(DayOfWeek dayOfWeek, bool activeOnly, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT id, name, slug, is_active, day_of_week, hour, minute_from, minute_to,
+       start_lat, start_lng, radius_km, window_start_local, window_end_local, target_start_local,
+       allowed_activity_types, min_distance_km, max_distance_km, report_chat_id, created_at, updated_at
+FROM club_runs
+WHERE day_of_week = $day_of_week AND ($active_only = 0 OR is_active = 1)
+ORDER BY hour, minute_from, name;";
+        cmd.Parameters.AddWithValue("$day_of_week", (int)dayOfWeek);
+        cmd.Parameters.AddWithValue("$active_only", activeOnly ? 1 : 0);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<ClubRunRecord>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(MapClubRun(reader));
+        }
+
+        return list;
+    }
+
+    public async Task<ClubRunRecord?> GetClubRunByIdAsync(long clubRunId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+SELECT id, name, slug, is_active, day_of_week, hour, minute_from, minute_to,
+       start_lat, start_lng, radius_km, window_start_local, window_end_local, target_start_local,
+       allowed_activity_types, min_distance_km, max_distance_km, report_chat_id, created_at, updated_at
+FROM club_runs
+WHERE id = $id
+LIMIT 1;";
+        cmd.Parameters.AddWithValue("$id", clubRunId);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return null;
+        }
+
+        return MapClubRun(reader);
+    }
+
+    public async Task<ClubRunRecord> UpsertClubRunAsync(ClubRunUpsert upsert, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO club_runs (
+    id, name, slug, is_active, day_of_week, hour, minute_from, minute_to,
+    start_lat, start_lng, radius_km, window_start_local, window_end_local, target_start_local,
+    allowed_activity_types, min_distance_km, max_distance_km, report_chat_id, created_at, updated_at)
+VALUES (
+    $id, $name, $slug, $is_active, $day_of_week, $hour, $minute_from, $minute_to,
+    $start_lat, $start_lng, $radius_km, $window_start_local, $window_end_local, $target_start_local,
+    $allowed_activity_types, $min_distance_km, $max_distance_km, $report_chat_id, COALESCE($created_at, $updated_at), $updated_at)
+ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    slug = excluded.slug,
+    is_active = excluded.is_active,
+    day_of_week = excluded.day_of_week,
+    hour = excluded.hour,
+    minute_from = excluded.minute_from,
+    minute_to = excluded.minute_to,
+    start_lat = excluded.start_lat,
+    start_lng = excluded.start_lng,
+    radius_km = excluded.radius_km,
+    window_start_local = excluded.window_start_local,
+    window_end_local = excluded.window_end_local,
+    target_start_local = excluded.target_start_local,
+    allowed_activity_types = excluded.allowed_activity_types,
+    min_distance_km = excluded.min_distance_km,
+    max_distance_km = excluded.max_distance_km,
+    report_chat_id = excluded.report_chat_id,
+    updated_at = excluded.updated_at;";
+        cmd.Parameters.AddWithValue("$id", (object?)upsert.Id ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$name", upsert.Name);
+        cmd.Parameters.AddWithValue("$slug", upsert.Slug);
+        cmd.Parameters.AddWithValue("$is_active", upsert.IsActive ? 1 : 0);
+        cmd.Parameters.AddWithValue("$day_of_week", upsert.DayOfWeek);
+        cmd.Parameters.AddWithValue("$hour", upsert.Hour);
+        cmd.Parameters.AddWithValue("$minute_from", upsert.MinuteFrom);
+        cmd.Parameters.AddWithValue("$minute_to", upsert.MinuteTo);
+        cmd.Parameters.AddWithValue("$start_lat", upsert.StartLat);
+        cmd.Parameters.AddWithValue("$start_lng", upsert.StartLng);
+        cmd.Parameters.AddWithValue("$radius_km", upsert.RadiusKm);
+        cmd.Parameters.AddWithValue("$window_start_local", upsert.WindowStartLocal);
+        cmd.Parameters.AddWithValue("$window_end_local", upsert.WindowEndLocal);
+        cmd.Parameters.AddWithValue("$target_start_local", upsert.TargetStartLocal);
+        cmd.Parameters.AddWithValue("$allowed_activity_types", upsert.AllowedActivityTypes);
+        cmd.Parameters.AddWithValue("$min_distance_km", (object?)upsert.MinDistanceKm ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$max_distance_km", (object?)upsert.MaxDistanceKm ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$report_chat_id", (object?)upsert.ReportChatId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$created_at", upsert.Id.HasValue ? DBNull.Value : now);
+        cmd.Parameters.AddWithValue("$updated_at", now);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        if (upsert.Id.HasValue)
+        {
+            return (await GetClubRunByIdAsync(upsert.Id.Value, ct))!;
+        }
+
+        await using var select = connection.CreateCommand();
+        select.CommandText = @"
+SELECT id, name, slug, is_active, day_of_week, hour, minute_from, minute_to,
+       start_lat, start_lng, radius_km, window_start_local, window_end_local, target_start_local,
+       allowed_activity_types, min_distance_km, max_distance_km, report_chat_id, created_at, updated_at
+FROM club_runs
+WHERE slug = $slug
+LIMIT 1;";
+        select.Parameters.AddWithValue("$slug", upsert.Slug);
+
+        await using var reader = await select.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        return MapClubRun(reader);
+    }
+
+    public async Task AddClubRunMemberAsync(long clubRunId, long userId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO club_run_members (club_run_id, user_id, added_at)
+VALUES ($club_run_id, $user_id, $added_at)
+ON CONFLICT(club_run_id, user_id) DO NOTHING;";
+        cmd.Parameters.AddWithValue("$club_run_id", clubRunId);
+        cmd.Parameters.AddWithValue("$user_id", userId);
+        cmd.Parameters.AddWithValue("$added_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RemoveClubRunMemberAsync(long clubRunId, long userId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM club_run_members WHERE club_run_id = $club_run_id AND user_id = $user_id;";
+        cmd.Parameters.AddWithValue("$club_run_id", clubRunId);
+        cmd.Parameters.AddWithValue("$user_id", userId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> IsClubRunMemberAsync(long clubRunId, long userId, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM club_run_members WHERE club_run_id = $club_run_id AND user_id = $user_id LIMIT 1;";
+        cmd.Parameters.AddWithValue("$club_run_id", clubRunId);
+        cmd.Parameters.AddWithValue("$user_id", userId);
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is not null;
+    }
+
+    public async Task SaveClubRunReportAsync(long clubRunId, string runDate, int totalUsers, int foundCount, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO club_run_reports (club_run_id, run_date, generated_at, total_users, found_count)
+VALUES ($club_run_id, $run_date, $generated_at, $total_users, $found_count)
+ON CONFLICT(club_run_id, run_date) DO UPDATE SET
+    generated_at = excluded.generated_at,
+    total_users = excluded.total_users,
+    found_count = excluded.found_count;";
+        cmd.Parameters.AddWithValue("$club_run_id", clubRunId);
+        cmd.Parameters.AddWithValue("$run_date", runDate);
+        cmd.Parameters.AddWithValue("$generated_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        cmd.Parameters.AddWithValue("$total_users", totalUsers);
+        cmd.Parameters.AddWithValue("$found_count", foundCount);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task UpsertClubRunAttendanceAsync(ClubRunAttendanceUpsert attendance, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO club_run_attendance (club_run_id, run_date, user_id, activity_id, start_date_local, start_lat, start_lng, distance_km, matched_reason)
+VALUES ($club_run_id, $run_date, $user_id, $activity_id, $start_date_local, $start_lat, $start_lng, $distance_km, $matched_reason)
+ON CONFLICT(club_run_id, run_date, user_id) DO UPDATE SET
+    activity_id = excluded.activity_id,
+    start_date_local = excluded.start_date_local,
+    start_lat = excluded.start_lat,
+    start_lng = excluded.start_lng,
+    distance_km = excluded.distance_km,
+    matched_reason = excluded.matched_reason;";
+        cmd.Parameters.AddWithValue("$club_run_id", attendance.ClubRunId);
+        cmd.Parameters.AddWithValue("$run_date", attendance.RunDate);
+        cmd.Parameters.AddWithValue("$user_id", attendance.UserId);
+        cmd.Parameters.AddWithValue("$activity_id", (object?)attendance.ActivityId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$start_date_local", attendance.StartDateLocal.HasValue ? attendance.StartDateLocal.Value.ToUnixTimeSeconds() : DBNull.Value);
+        cmd.Parameters.AddWithValue("$start_lat", (object?)attendance.StartLat ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$start_lng", (object?)attendance.StartLng ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$distance_km", (object?)attendance.DistanceKm ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$matched_reason", attendance.MatchedReason);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<bool> ClubRunReportExistsAsync(long clubRunId, string runDate, CancellationToken ct = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(ct);
+
+        await using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM club_run_reports WHERE club_run_id = $club_run_id AND run_date = $run_date LIMIT 1;";
+        cmd.Parameters.AddWithValue("$club_run_id", clubRunId);
+        cmd.Parameters.AddWithValue("$run_date", runDate);
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is not null;
+    }
+
+    private async Task<List<UserWithAuth>> ReadUsersWithAuthAsync(SqliteCommand cmd, CancellationToken ct)
+    {
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<UserWithAuth>();
+        while (await reader.ReadAsync(ct))
+        {
+            var user = new UserRecord(
+                reader.GetInt64(0),
+                reader.GetInt64(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)));
+
+            StravaAuthRecord? auth = null;
+            if (!reader.IsDBNull(6))
+            {
+                auth = new StravaAuthRecord(
+                    reader.GetInt64(6),
+                    reader.GetInt64(7),
+                    _tokenProtector.Unprotect(reader.GetString(8)),
+                    _tokenProtector.Unprotect(reader.GetString(9)),
+                    reader.GetInt64(10),
+                    reader.GetString(11),
+                    DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(12)));
+            }
+
+            list.Add(new UserWithAuth(user, auth));
+        }
+
+        return list;
+    }
+
     private static UserRecord MapUser(SqliteDataReader reader)
     {
         return new UserRecord(
@@ -640,10 +984,29 @@ ON CONFLICT(key) DO UPDATE SET
             reader.IsDBNull(4) ? null : reader.GetString(4),
             DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)));
     }
+
+    private static ClubRunRecord MapClubRun(SqliteDataReader reader)
+    {
+        return new ClubRunRecord(
+            reader.GetInt64(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetInt64(3) == 1,
+            reader.GetInt32(4),
+            reader.GetInt32(5),
+            reader.GetInt32(6),
+            reader.GetInt32(7),
+            reader.GetDouble(8),
+            reader.GetDouble(9),
+            reader.GetDouble(10),
+            reader.GetString(11),
+            reader.GetString(12),
+            reader.GetString(13),
+            reader.GetString(14),
+            reader.IsDBNull(15) ? null : reader.GetDouble(15),
+            reader.IsDBNull(16) ? null : reader.GetDouble(16),
+            reader.IsDBNull(17) ? null : reader.GetInt64(17),
+            DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(18)),
+            DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(19)));
+    }
 }
-
-
-
-
-
-

@@ -1,5 +1,4 @@
 using System.Globalization;
-using Microsoft.Extensions.Options;
 using Telegram.Bot;
 
 namespace TRC_Bot;
@@ -8,48 +7,79 @@ public sealed class AttendanceJobService(
     SqliteRepository repository,
     StravaApiClient stravaApi,
     ITelegramBotClient telegramBot,
-    ILogger<AttendanceJobService> logger,
-    IOptions<AppOptions> options)
+    ILogger<AttendanceJobService> logger)
 {
-    private readonly AppOptions _options = options.Value;
     private static readonly TimeZoneInfo TbilisiTimeZone = ResolveTbilisiTimeZone();
 
-    // Default execution path used in bot mode and /run command:
-    // run job + publish to configured default chat (if provided).
-    public Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate = null, CancellationToken ct = default) =>
-        RunAsync(targetLocalDate, publishToDefaultTarget: true, ct);
-
-    // Explicit execution path used by console "job" mode:
-    // run job only, then caller decides where to print/send report.
-    public async Task<AttendanceRunResult> RunAsync(DateTime? targetLocalDate, bool publishToDefaultTarget, CancellationToken ct = default)
+    public async Task<List<ClubRunAttendanceResult>> RunAsync(
+        DateTime? targetLocalDate = null,
+        long? specificClubRunId = null,
+        long? publishChatId = null,
+        bool skipExistingReports = false,
+        CancellationToken ct = default)
     {
-        // Build the run date in Tbilisi local time because attendance is local-event based.
         var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TbilisiTimeZone);
-        var runDate = (targetLocalDate ?? nowLocal.Date).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var targetDate = DateOnly.FromDateTime((targetLocalDate ?? nowLocal.Date).Date);
 
-        var users = await repository.GetAllUsersWithAuthAsync(ct);
+        List<ClubRunRecord> runs;
+        if (specificClubRunId.HasValue)
+        {
+            var clubRun = await repository.GetClubRunByIdAsync(specificClubRunId.Value, ct);
+            runs = clubRun is null ? [] : [clubRun];
+        }
+        else
+        {
+            runs = await repository.GetClubRunsForDayAsync(targetDate.DayOfWeek, activeOnly: true, ct);
+        }
+
+        var results = new List<ClubRunAttendanceResult>();
+        foreach (var clubRun in runs)
+        {
+            var result = await RunClubRunAsync(clubRun, targetDate, publishChatId, skipExistingReports, ct);
+            if (result is not null)
+            {
+                results.Add(result);
+            }
+        }
+
+        return results;
+    }
+
+    private async Task<ClubRunAttendanceResult?> RunClubRunAsync(
+        ClubRunRecord clubRun,
+        DateOnly targetDate,
+        long? publishChatId,
+        bool skipExistingReports,
+        CancellationToken ct)
+    {
+        var runDate = targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (skipExistingReports && await repository.ClubRunReportExistsAsync(clubRun.Id, runDate, ct))
+        {
+            logger.LogInformation("Club run report already exists for {ClubRunId} {RunDate}", clubRun.Id, runDate);
+            return null;
+        }
+
+        var users = await repository.GetClubRunMembersWithAuthAsync(clubRun.Id, ct);
         var found = new List<AttendanceUserResult>();
         var notFound = new List<AttendanceUserResult>();
         var errors = new List<AttendanceUserResult>();
 
-        var windowStart = ParseLocalTime(_options.Matching.WindowStartLocal);
-        var windowEnd = ParseLocalTime(_options.Matching.WindowEndLocal);
-        var targetStart = ParseLocalTime(_options.Matching.TargetStartLocal);
-        // Strava activities API filter uses UNIX timestamps.
-        var after = ToUnixInTbilisi(DateTime.ParseExact(runDate, "yyyy-MM-dd", CultureInfo.InvariantCulture).Add(windowStart));
-        var before = ToUnixInTbilisi(DateTime.ParseExact(runDate, "yyyy-MM-dd", CultureInfo.InvariantCulture).Add(windowEnd));
+        var windowStart = ParseLocalTime(clubRun.WindowStartLocal);
+        var windowEnd = ParseLocalTime(clubRun.WindowEndLocal);
+        var targetStart = ParseLocalTime(clubRun.TargetStartLocal);
+        var after = ToUnixInTbilisi(targetDate.ToDateTime(TimeOnly.MinValue).Add(windowStart));
+        var before = ToUnixInTbilisi(targetDate.ToDateTime(TimeOnly.MinValue).Add(windowEnd));
 
-        // Process users independently: one broken token must not fail the whole report.
         foreach (var userWithAuth in users)
         {
             var user = userWithAuth.User;
-
             if (userWithAuth.Auth is null)
             {
-                // User exists in Telegram but has not connected Strava yet.
                 var item = new AttendanceUserResult(user, false, null, "No Strava connection", false, null);
                 notFound.Add(item);
-                await repository.UpsertAttendanceAsync(new AttendanceUpsert(runDate, user.Id, null, null, null, null, null, item.Reason), ct);
+                await repository.UpsertClubRunAttendanceAsync(
+                    new ClubRunAttendanceUpsert(clubRun.Id, runDate, user.Id, null, null, null, null, null, item.Reason),
+                    ct);
                 continue;
             }
 
@@ -58,7 +88,6 @@ public sealed class AttendanceJobService(
                 var auth = userWithAuth.Auth;
                 if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() >= auth.ExpiresAt - 60)
                 {
-                    // Strava rotates refresh tokens; always store both new access and refresh tokens.
                     var refreshed = await stravaApi.RefreshTokenAsync(auth.RefreshToken, ct);
                     await repository.SaveStravaAuthAsync(
                         user.Id,
@@ -68,18 +97,25 @@ public sealed class AttendanceJobService(
                         refreshed.ExpiresAt,
                         refreshed.Scope,
                         ct);
-                    auth = new StravaAuthRecord(user.Id, refreshed.Athlete.Id, refreshed.AccessToken, refreshed.RefreshToken, refreshed.ExpiresAt, refreshed.Scope, DateTimeOffset.UtcNow);
+                    auth = new StravaAuthRecord(
+                        user.Id,
+                        refreshed.Athlete.Id,
+                        refreshed.AccessToken,
+                        refreshed.RefreshToken,
+                        refreshed.ExpiresAt,
+                        refreshed.Scope,
+                        DateTimeOffset.UtcNow);
                 }
 
                 var activities = await stravaApi.GetActivitiesAsync(auth.AccessToken, after, before, ct);
-                var best = FindBestMatch(activities, windowStart, windowEnd, targetStart);
-
+                var best = FindBestMatch(clubRun, activities, windowStart, windowEnd, targetStart);
                 if (best is null)
                 {
-                    // No activity passed filters (time/radius/type/distance).
-                    var item = new AttendanceUserResult(user, false, null, "No matching activity in configured window/radius", false, null);
+                    var item = new AttendanceUserResult(user, false, null, "No matching activity", false, null);
                     notFound.Add(item);
-                    await repository.UpsertAttendanceAsync(new AttendanceUpsert(runDate, user.Id, null, null, null, null, null, item.Reason), ct);
+                    await repository.UpsertClubRunAttendanceAsync(
+                        new ClubRunAttendanceUpsert(clubRun.Id, runDate, user.Id, null, null, null, null, null, item.Reason),
+                        ct);
                     continue;
                 }
 
@@ -87,61 +123,62 @@ public sealed class AttendanceJobService(
                 var lat = best.StartLatLng![0];
                 var lng = best.StartLatLng![1];
                 var distanceKm = best.DistanceMeters / 1000.0;
-
-                var foundItem = new AttendanceUserResult(
-                    user,
-                    true,
-                    best.Id,
-                    $"type={best.Type}, distance={distanceKm:F2}km, radius<= {_options.Matching.RadiusKm:F1}km",
-                    false,
-                    null);
+                var reason = $"type={best.Type}, distance={distanceKm:F2}km, radius<={clubRun.RadiusKm:F1}km";
+                var foundItem = new AttendanceUserResult(user, true, best.Id, reason, false, null);
                 found.Add(foundItem);
 
-                await repository.UpsertAttendanceAsync(new AttendanceUpsert(
-                    runDate,
-                    user.Id,
-                    best.Id,
-                    new DateTimeOffset(startLocal, TbilisiTimeZone.GetUtcOffset(startLocal)),
-                    lat,
-                    lng,
-                    distanceKm,
-                    foundItem.Reason), ct);
+                await repository.UpsertClubRunAttendanceAsync(
+                    new ClubRunAttendanceUpsert(
+                        clubRun.Id,
+                        runDate,
+                        user.Id,
+                        best.Id,
+                        new DateTimeOffset(startLocal, TbilisiTimeZone.GetUtcOffset(startLocal)),
+                        lat,
+                        lng,
+                        distanceKm,
+                        foundItem.Reason),
+                    ct);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed processing user {TelegramUserId}", user.TelegramUserId);
+                logger.LogError(ex, "Failed processing club run {ClubRunId} user {TelegramUserId}", clubRun.Id, user.TelegramUserId);
                 var item = new AttendanceUserResult(user, false, null, "User processing error", true, ex.Message);
                 errors.Add(item);
-                await repository.UpsertAttendanceAsync(new AttendanceUpsert(runDate, user.Id, null, null, null, null, null, $"error: {ex.Message}"), ct);
+                await repository.UpsertClubRunAttendanceAsync(
+                    new ClubRunAttendanceUpsert(clubRun.Id, runDate, user.Id, null, null, null, null, null, $"error: {ex.Message}"),
+                    ct);
             }
         }
 
-        await repository.SaveRunAsync(runDate, users.Count, found.Count, ct);
-        // Report is published after DB write so audit history is always present.
-        var result = new AttendanceRunResult(runDate, found, notFound, errors);
-        if (publishToDefaultTarget)
+        await repository.SaveClubRunReportAsync(clubRun.Id, runDate, users.Count, found.Count, ct);
+        var result = new ClubRunAttendanceResult(clubRun, runDate, found, notFound, errors);
+
+        var destinationChatId = publishChatId ?? clubRun.ReportChatId;
+        if (destinationChatId.HasValue)
         {
-            await PublishReportAsync(result, ct);
+            await PublishReportToChatAsync(result, destinationChatId.Value, ct);
         }
 
         return result;
     }
 
-    private ActivityResponse? FindBestMatch(List<ActivityResponse> activities, TimeSpan windowStart, TimeSpan windowEnd, TimeSpan targetStart)
+    private static ActivityResponse? FindBestMatch(
+        ClubRunRecord clubRun,
+        List<ActivityResponse> activities,
+        TimeSpan windowStart,
+        TimeSpan windowEnd,
+        TimeSpan targetStart)
     {
-        var allowedTypes = new HashSet<string>(_options.Matching.AllowedActivityTypes, StringComparer.OrdinalIgnoreCase);
-
-        // Matching policy for MVP:
-        // 1) filter by type/time/radius/distance
-        // 2) pick the one closest to configured target start time
+        var allowedTypes = ParseAllowedTypes(clubRun.AllowedActivityTypes);
         var candidates = activities
             .Where(a => allowedTypes.Contains(a.Type))
             .Where(a => a.StartLatLng is { Count: >= 2 })
             .Select(a => new { Activity = a, LocalStart = ParseStravaLocal(a.StartDateLocal) })
             .Where(x => x.LocalStart.TimeOfDay >= windowStart && x.LocalStart.TimeOfDay <= windowEnd)
-            .Where(x => HaversineKm(x.Activity.StartLatLng![0], x.Activity.StartLatLng[1], _options.Matching.LisiStartLat, _options.Matching.LisiStartLng) <= _options.Matching.RadiusKm)
-            .Where(x => !_options.Matching.MinDistanceKm.HasValue || x.Activity.DistanceMeters / 1000.0 >= _options.Matching.MinDistanceKm.Value)
-            .Where(x => !_options.Matching.MaxDistanceKm.HasValue || x.Activity.DistanceMeters / 1000.0 <= _options.Matching.MaxDistanceKm.Value)
+            .Where(x => HaversineKm(x.Activity.StartLatLng![0], x.Activity.StartLatLng[1], clubRun.StartLat, clubRun.StartLng) <= clubRun.RadiusKm)
+            .Where(x => !clubRun.MinDistanceKm.HasValue || x.Activity.DistanceMeters / 1000.0 >= clubRun.MinDistanceKm.Value)
+            .Where(x => !clubRun.MaxDistanceKm.HasValue || x.Activity.DistanceMeters / 1000.0 <= clubRun.MaxDistanceKm.Value)
             .OrderBy(x => Math.Abs((x.LocalStart.TimeOfDay - targetStart).TotalMinutes))
             .ThenBy(x => x.LocalStart)
             .Select(x => x.Activity)
@@ -150,35 +187,19 @@ public sealed class AttendanceJobService(
         return candidates.FirstOrDefault();
     }
 
-    public async Task PublishReportAsync(AttendanceRunResult result, CancellationToken ct)
+    public async Task PublishReportToChatAsync(ClubRunAttendanceResult result, long chatId, CancellationToken ct)
     {
-        // If group chat id is not configured, reporting is skipped in automatic mode.
-        if (!_options.Telegram.GroupChatId.HasValue)
-        {
-            logger.LogInformation("Telegram.GroupChatId is not configured. Skipping Telegram report publishing.");
-            return;
-        }
-
-        await PublishReportToChatAsync(result, _options.Telegram.GroupChatId.Value, ct);
+        await telegramBot.SendMessage(chatId, BuildReportText(result), cancellationToken: ct);
     }
 
-    public async Task PublishReportToChatAsync(AttendanceRunResult result, long chatId, CancellationToken ct)
+    public string BuildReportText(ClubRunAttendanceResult result)
     {
-        await telegramBot.SendMessage(
-            chatId,
-            BuildReportText(result),
-            cancellationToken: ct);
-    }
-
-    public string BuildReportText(AttendanceRunResult result)
-    {
-        // Keep message plain-text and compact for Telegram readability.
         var lines = new List<string>
         {
-            $"Lisi Sunrise attendance - {result.RunDate}",
+            $"{result.ClubRun.Name} attendance - {result.RunDate}",
             $"Found: {result.Found.Count} / {result.Found.Count + result.NotFound.Count + result.Errors.Count}",
             string.Empty,
-            "✅ Found:"
+            "Found:"
         };
 
         lines.AddRange(result.Found.Count == 0
@@ -186,7 +207,7 @@ public sealed class AttendanceJobService(
             : result.Found.Select(x => $"- {DisplayName(x.User)}: https://www.strava.com/activities/{x.ActivityId}"));
 
         lines.Add(string.Empty);
-        lines.Add("❓ Not found:");
+        lines.Add("Not found:");
         lines.AddRange(result.NotFound.Count == 0
             ? ["- none"]
             : result.NotFound.Select(x => $"- {DisplayName(x.User)}"));
@@ -194,27 +215,29 @@ public sealed class AttendanceJobService(
         if (result.Errors.Count > 0)
         {
             lines.Add(string.Empty);
-            lines.Add("⚠ errors:");
+            lines.Add("Errors:");
             lines.AddRange(result.Errors.Select(x => $"- {DisplayName(x.User)} ({x.ErrorMessage})"));
         }
 
-        lines.Add(string.Empty);
-        lines.Add("If your run is private, bot may not see it. Reconnect with read_all or make activity visible.");
         return string.Join(Environment.NewLine, lines);
+    }
+
+    private static HashSet<string> ParseAllowedTypes(string value)
+    {
+        return value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static TimeSpan ParseLocalTime(string value) => TimeSpan.ParseExact(value, @"hh\:mm", CultureInfo.InvariantCulture);
 
     private static long ToUnixInTbilisi(DateTime localTime)
     {
-        // Convert local event time to unix seconds with explicit timezone offset.
         var offset = new DateTimeOffset(localTime, TbilisiTimeZone.GetUtcOffset(localTime));
         return offset.ToUnixTimeSeconds();
     }
 
     private static DateTime ParseStravaLocal(string value)
     {
-        // Strava returns local datetime text; parse defensively for format variations.
         if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var dt))
         {
             return dt;
@@ -225,7 +248,6 @@ public sealed class AttendanceJobService(
 
     private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
     {
-        // Great-circle distance on Earth between activity start and Lisi target point.
         const double earthRadiusKm = 6371.0;
         var dLat = DegToRad(lat2 - lat1);
         var dLon = DegToRad(lon2 - lon1);
@@ -251,7 +273,6 @@ public sealed class AttendanceJobService(
 
     private static TimeZoneInfo ResolveTbilisiTimeZone()
     {
-        // Support both Linux and Windows timezone identifiers.
         foreach (var id in new[] { "Asia/Tbilisi", "Georgian Standard Time" })
         {
             try
@@ -260,7 +281,6 @@ public sealed class AttendanceJobService(
             }
             catch
             {
-                // Try next ID.
             }
         }
 

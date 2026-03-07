@@ -8,7 +8,8 @@ public sealed record AttendanceUserResult(
     bool IsError,
     string? ErrorMessage);
 
-public sealed record AttendanceRunResult(
+public sealed record ClubRunAttendanceResult(
+    ClubRunRecord ClubRun,
     string RunDate,
     List<AttendanceUserResult> Found,
     List<AttendanceUserResult> NotFound,

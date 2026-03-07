@@ -29,7 +29,7 @@ var appOptions = app.Services.GetRequiredService<IOptions<AppOptions>>().Value;
 await repository.EnsureAdminsAsync(appOptions.Telegram.AdminTelegramUserIds);
 
 ConfigureListenFromRedirectUri(app);
-app.MapGet("/", () => Results.Text("Lisi Sunrise bot is running."));
+app.MapGet("/", () => Results.Text("TRC Bot is running."));
 app.MapStravaEndpoints();
 
 await app.RunAsync();
@@ -82,7 +82,7 @@ static void RegisterCoreServices(IServiceCollection services, IConfiguration con
 static void ConfigureSerilog(IConfiguration configuration)
 {
     // Log file path can be relative in config; convert to absolute path near app binaries.
-    var logPath = configuration["Logging:LogPath"] ?? "logs/lisi-sunrise-.log";
+    var logPath = configuration["Logging:LogPath"] ?? "logs/trc-bot-.log";
     if (!Path.IsPathRooted(logPath))
         logPath = Path.Combine(AppContext.BaseDirectory, logPath);
 
@@ -109,5 +109,6 @@ static void ConfigureListenFromRedirectUri(WebApplication app)
     if (!app.Urls.Contains(listenUrl, StringComparer.OrdinalIgnoreCase))
         app.Urls.Add(listenUrl);
 }
+
 
 
