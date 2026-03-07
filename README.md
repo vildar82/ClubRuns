@@ -1,133 +1,144 @@
-# Lisi Sunrise MVP
+# TRC_Bot
 
-Telegram bot + Strava Friday attendance auto-check.
+Telegram bot for Tbilisi Running Club attendance tracking with one-time Strava connection and multiple configurable club runs.
 
-## Implemented
+## What the bot does
 
-- Single runtime mode: `bot` (long-running process).
-- Telegram polling, OAuth callback endpoint (`/strava/callback`), and in-process scheduler.
-- SQLite storage: `users`, `strava_auth`, `runs`, `attendance`, `oauth_states`, `legacy_stats`, `admins`, `app_settings`.
-- Automatic Strava token refresh.
-- Plain-text token storage in SQLite (portable DB between users/machines).
-- Console + file logging.
+- Registers a Telegram user and connects Strava once via `/start`.
+- Stores multiple club runs in SQLite.
+- Keeps a separate member list for each club run.
+- Runs attendance checks for every active club run scheduled for the selected day.
+- Lets admins create and edit club runs from Telegram through a guided `/manage` dialog.
+- Keeps legacy import and leaderboard support for old manually tracked statistics.
 
-## Bot Commands
+## Current bot commands
 
-- `/start`  
-  Registers or updates the Telegram user in local DB and returns a `Connect Strava` button.
-- `/connect`  
-  Generates a fresh Strava OAuth link and sends it to the user.
-- `/leaderboard`  
-  Shows combined leaderboard: imported legacy baseline + auto-tracked attendance.
-- `/myid`  
-  Shows your Telegram user id.
-- `/help`  
-  Shows command list.
+User commands:
+- `/start` - register user and show Strava connect button.
+- `/leaderboard` - show combined legacy + auto-tracked attendance leaderboard.
+- `/myid` - show Telegram user id.
+- `/help` - show help.
 
 Admin commands:
-- `/status`  
-  Shows total registered users and how many have Strava connected.
-- `/users`  
-  Prints a short list of users with connection status (`connected` / `not connected`).
-- `/run` or `/job`  
-  Triggers attendance job immediately.
-- `/admins`  
-  Lists current admins.
-- `/addadmin <id|@username>`  
-  Adds a new admin dynamically.
-- `/setstrava <client_id> <client_secret>`  
-  Stores Strava credentials in DB settings.
-- `/stravastatus`  
-  Shows whether Strava credentials are configured.
-- `/importlegacy`  
-  Starts legacy import session. Send raw leaderboard text messages after this command.
-- `/importlegacydone`  
-  Finishes import session and writes parsed data into `legacy_stats`.
-- `/importlegacycancel`  
-  Cancels active import session.
-- `/importlegacyexample`  
-  Sends example import text loaded from `legacy_stats.example.txt`.
+- `/manage` - create and edit club runs with prompts.
+- `/users` - list registered users and Strava connection status.
+- `/run [YYYY-MM-DD] [club_run_id]` - run attendance check manually.
+- `/admins` - list admins.
+- `/addadmin <id|@username>` - add admin.
+- `/setstrava <client_id> <client_secret>` - store Strava credentials in DB settings.
+- `/stravastatus` - show whether Strava credentials are configured.
+- `/importlegacy` - start legacy stats import session.
+- `/importlegacydone` - finish import session.
+- `/importlegacycancel` - cancel import session.
+- `/importlegacyexample` - send example legacy import text.
 
-Admin bootstrap is controlled by `Telegram.AdminTelegramUserIds` in config. After startup, admins can add more admins with `/addadmin`.
+## Manage dialog
 
-## Secrets Strategy
+`/manage` opens a keyboard-driven admin flow.
 
-### Simple for local debugging (now)
+Available actions:
+- `Create run`
+- `Edit run`
+- `List runs`
+- `Cancel`
 
-1. Copy `LisiSunrise/local.settings.example.json` to `LisiSunrise/local.settings.json`.
-2. Fill values:
+Create flow asks for:
+- run name
+- day of week
+- schedule hour and minute window
+- start latitude and longitude
+- radius in km
+- attendance search window start/end
+- target start time
+- optional report chat id
+
+Edit flow supports:
+- edit name
+- edit day
+- edit hour
+- edit minute range
+- edit start point and radius
+- edit attendance window
+- edit report chat id
+- toggle active/inactive
+- manage members
+- run selected club run immediately
+
+Member management supports:
+- list members
+- add member by Telegram user id or `@username`
+- remove member by Telegram user id or `@username`
+
+Important: user must have already used `/start` before they can be added to a club run.
+
+## Data model
+
+Core tables:
+- `users`
+- `strava_auth`
+- `club_runs`
+- `club_run_members`
+- `club_run_reports`
+- `club_run_attendance`
+- `oauth_states`
+- `admins`
+- `app_settings`
+
+Legacy compatibility tables still exist:
+- `runs`
+- `attendance`
+- `legacy_stats`
+
+## Configuration
+
+Base config file: `TRC_Bot/appsettings.json`
+
+Properties:
+- `Telegram.BotToken` - Telegram bot token from `@BotFather`.
+- `Telegram.AdminTelegramUserIds` - bootstrap admin ids on startup.
+- `Strava.RedirectUri` - OAuth callback URL, must match the Strava app settings.
+- `Strava.UseReadAllScope` - `true` requests `activity:read_all`, `false` requests `activity:read`.
+- `Strava.ClientId` - optional fallback Strava client id.
+- `Strava.ClientSecret` - optional fallback Strava client secret.
+- `Database.Path` - SQLite file path, relative paths are resolved from app runtime directory.
+- `Schedule.DayOfWeek` - global scheduler day in Tbilisi time.
+- `Schedule.Hour` - global scheduler hour.
+- `Schedule.MinuteFrom` - beginning of scheduler catch-up window.
+- `Schedule.MinuteTo` - end of scheduler catch-up window.
+- `Logging.LogPath` - log file path.
+
+Runtime Strava credentials set by `/setstrava` are stored in the database and override appsettings values.
+
+## Local development
+
+1. Fill `TRC_Bot/local.settings.json` or use environment variables.
+2. Set at least:
 - `Telegram.BotToken`
-- `Telegram.AdminTelegramUserIds` (your id)
-3. Run app:
+- `Telegram.AdminTelegramUserIds`
+3. Run:
 
 ```powershell
-dotnet run --project .\LisiSunrise\LisiSunrise.csproj
+dotnet run --project .\TRC_Bot\TRC_Bot.csproj
 ```
 
-4. In Telegram as admin, set Strava secrets once:
+4. In Telegram:
+- run `/start`
+- run `/setstrava <client_id> <client_secret>` as admin if Strava secrets are not already configured
+- run `/manage` to create club runs
 
-```text
-/setstrava <client_id> <client_secret>
-```
+## Legacy import
 
-`local.settings.json` is ignored by git.
+Example file:
+- `TRC_Bot/legacy_stats.example.txt`
 
-### For server/production (later)
-
-- Set `Telegram__BotToken` and bootstrap admin ids via environment variables or secret manager.
-- Keep Strava credentials either:
-  - in env vars (`Strava__ClientId`, `Strava__ClientSecret`), or
-  - via `/setstrava` stored in DB (`app_settings`).
-- Prefer secret manager (Docker/K8s secrets, cloud secrets, CI/CD secret vars) over files.
-
-## Quick Start
-
-1. Configure defaults in `LisiSunrise/appsettings.json` (non-secret values).
-2. Configure secrets as described above.
-3. Run bot mode:
-
-```powershell
-dotnet run --project .\LisiSunrise\LisiSunrise.csproj
-```
-
-## Legacy Import Format
-
-You can use the sample file in repo as a format reference:
-- `LisiSunrise/legacy_stats.example.txt`
-
-In Telegram:
+Telegram flow:
 1. `/importlegacy`
-2. Send leaderboard text (one or multiple messages)
+2. send leaderboard text in one or more messages
 3. `/importlegacydone`
 
-## appsettings.json Reference
+## Notes
 
-- `Telegram.BotToken`  
-  Telegram bot API token from `@BotFather` (optional if using env/local.settings).
-- `Telegram.GroupChatId`  
-  Optional default Telegram chat id for automatic report publishing.
-- `Telegram.AdminTelegramUserIds`  
-  Bootstrap admin user ids at startup.
-
-- `Strava.RedirectUri`  
-  OAuth callback URL handled by this app (must match Strava app callback).
-- `Strava.UseReadAllScope`  
-  `true` to request `activity:read_all`, `false` for `activity:read`.
-- `Strava.ClientId` / `Strava.ClientSecret`  
-  Optional fallback from env/appsettings. Runtime DB values set by `/setstrava` take priority.
-
-- `Matching.*`  
-  Matching filters for attendance (coords, radius, time window, allowed activity types, optional distance bounds).
-- `Database.Path`  
-  SQLite file path. Relative path is resolved from app runtime directory.
-- `Schedule.DayOfWeek`, `Schedule.Hour`, `Schedule.MinuteFrom`, `Schedule.MinuteTo`  
-  Scheduler config in Tbilisi local time.
-- `Logging.LogPath`  
-  File log path.
-
-## MVP Notes
-
-- Private activities require `activity:read_all`.
-- If callback server is not reachable at `RedirectUri`, Strava connection cannot complete.
-- Tokens are currently stored as plain text in SQLite for portability.
-- For production: add migrations, retry policies, and stricter startup config validation.
+- Tokens are stored in plain text in SQLite for portability.
+- Scheduler checks only active club runs that match the selected day.
+- Manual `/run` can target all runs for a day or a specific `club_run_id`.
+- Private Strava activities require `activity:read_all`.

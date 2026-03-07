@@ -9,10 +9,10 @@ public sealed record LeaderboardEntry(
 
 public sealed record LeaderboardSummary(
     IReadOnlyList<LeaderboardEntry> Entries,
-    int TotalSunrisers,
-    int TotalSunriseExperiences,
-    int TotalNoSunExperiences,
-    int TotalOutOfBed,
+    int TotalParticipants,
+    int TotalFoundAttendances,
+    int TotalMissedAttendances,
+    int TotalTrackedAttempts,
     int AutoRunsCount,
     int? LatestRunAttendance,
     int? HighestAttendance,

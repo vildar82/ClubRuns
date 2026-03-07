@@ -59,10 +59,10 @@ public sealed class LeaderboardService(SqliteRepository repository)
 
         return new LeaderboardSummary(
             entries,
-            TotalSunrisers: entries.Count,
-            TotalSunriseExperiences: entries.Sum(x => x.SunCount),
-            TotalNoSunExperiences: entries.Sum(x => x.NoSunCount),
-            TotalOutOfBed: entries.Sum(x => x.RunsCount),
+            TotalParticipants: entries.Count,
+            TotalFoundAttendances: entries.Sum(x => x.SunCount),
+            TotalMissedAttendances: entries.Sum(x => x.NoSunCount),
+            TotalTrackedAttempts: entries.Sum(x => x.RunsCount),
             AutoRunsCount: totalRuns,
             LatestRunAttendance: latestAttendance,
             HighestAttendance: highestAttendance,
@@ -73,7 +73,7 @@ public sealed class LeaderboardService(SqliteRepository repository)
     {
         var lines = new List<string>
         {
-            "Sunny Leaderboard",
+            "TRC Attendance Leaderboard",
             string.Empty
         };
 
@@ -84,20 +84,20 @@ public sealed class LeaderboardService(SqliteRepository repository)
                 ? $"{item.DisplayName} (@{item.TelegramUsername})"
                 : item.DisplayName;
 
-            lines.Add($"{rank}. {name} - {item.RunsCount} (🌞 {item.SunCount} / 🌥 {item.NoSunCount})");
+            lines.Add($"{rank}. {name} - {item.RunsCount} (found {item.SunCount} / missed {item.NoSunCount})");
             rank++;
         }
 
         lines.Add(string.Empty);
-        lines.Add($"Total Sunrisers: {summary.TotalSunrisers}");
-        lines.Add($"Total Sunrise experiences: {summary.TotalSunriseExperiences}");
-        lines.Add($"Total NOsun experiences: {summary.TotalNoSunExperiences}");
-        lines.Add($"Total OutOfBed: {summary.TotalOutOfBed}");
-        lines.Add($"Auto-tracked runs: {summary.AutoRunsCount}");
+        lines.Add($"Total participants: {summary.TotalParticipants}");
+        lines.Add($"Total found attendances: {summary.TotalFoundAttendances}");
+        lines.Add($"Total missed attendances: {summary.TotalMissedAttendances}");
+        lines.Add($"Total tracked attempts: {summary.TotalTrackedAttempts}");
+        lines.Add($"Auto-tracked reports: {summary.AutoRunsCount}");
 
         if (summary.LatestRunAttendance.HasValue)
         {
-            lines.Add($"Latest run attendance: {summary.LatestRunAttendance.Value}");
+            lines.Add($"Latest attendance: {summary.LatestRunAttendance.Value}");
         }
 
         if (summary.HighestAttendance.HasValue)
