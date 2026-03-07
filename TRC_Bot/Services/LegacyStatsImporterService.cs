@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public sealed class LegacyStatsImporterService(SqliteRepository repository, ILogger<LegacyStatsImporterService> logger)
 {

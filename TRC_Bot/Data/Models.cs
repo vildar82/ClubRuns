@@ -1,4 +1,4 @@
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 // users table row
 public sealed record UserRecord(

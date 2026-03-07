@@ -1,7 +1,7 @@
-using LisiSunrise;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Telegram.Bot;
+using TRC_Bot;
 
 var builder = WebApplication.CreateBuilder(args);
 

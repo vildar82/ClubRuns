@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Options;
 
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public sealed class RuntimeSettingsService(SqliteRepository repository, IOptions<AppOptions> options)
 {

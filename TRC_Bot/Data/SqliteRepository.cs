@@ -1,6 +1,6 @@
 using Microsoft.Data.Sqlite;
 
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public sealed class SqliteRepository
 {

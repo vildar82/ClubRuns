@@ -1,6 +1,6 @@
 using Telegram.Bot;
 
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public static class StravaCallbackEndpoints
 {

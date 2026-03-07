@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public sealed class LeaderboardService(SqliteRepository repository)
 {

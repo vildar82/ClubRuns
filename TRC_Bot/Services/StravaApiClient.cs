@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> options, RuntimeSettingsService runtimeSettings)
 {

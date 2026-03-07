@@ -2,7 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.Options;
 using Telegram.Bot;
 
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public sealed class AttendanceJobService(
     SqliteRepository repository,

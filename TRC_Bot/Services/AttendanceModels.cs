@@ -1,4 +1,4 @@
-namespace LisiSunrise;
+namespace TRC_Bot;
 
 public sealed record AttendanceUserResult(
     UserRecord User,
