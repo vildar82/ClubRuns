@@ -8,7 +8,7 @@ Telegram bot for Tbilisi Running Club attendance tracking with one-time Strava c
 - Stores multiple club runs in SQLite.
 - Keeps a separate member list for each club run.
 - Runs attendance checks for every active club run scheduled for the selected day.
-- Lets admins create and edit club runs from Telegram through a guided `/manage` dialog.
+- Lets admins create and edit club runs from Telegram through a guided `/manage` dialog with inline buttons.
 - Keeps legacy import and leaderboard support for old manually tracked statistics.
 
 ## Current bot commands
@@ -34,7 +34,7 @@ Admin commands:
 
 ## Manage dialog
 
-`/manage` opens a keyboard-driven admin flow.
+`/manage` opens an inline-button admin flow.
 
 Available actions:
 - `Create run`

@@ -31,7 +31,7 @@ public sealed class TelegramBotHostedService(
         botClient.StartReceiving(
             updateHandler: HandleUpdateAsync,
             errorHandler: HandleErrorAsync,
-            receiverOptions: new ReceiverOptions { AllowedUpdates = [UpdateType.Message] },
+            receiverOptions: new ReceiverOptions { AllowedUpdates = [UpdateType.Message, UpdateType.CallbackQuery] },
             cancellationToken: stoppingToken);
 
         await Task.Delay(Timeout.Infinite, stoppingToken);
@@ -45,6 +45,12 @@ public sealed class TelegramBotHostedService(
 
     private async Task HandleUpdateAsync(ITelegramBotClient _, Update update, CancellationToken ct)
     {
+        if (update.CallbackQuery is { From: not null } callbackQuery)
+        {
+            await HandleCallbackQueryAsync(callbackQuery, ct);
+            return;
+        }
+
         if (update.Message?.Text is not { } text || update.Message.From is null)
         {
             return;
@@ -184,7 +190,7 @@ public sealed class TelegramBotHostedService(
         await botClient.SendMessage(
             chatId,
             "Manage club runs:",
-            replyMarkup: BuildKeyboard(["Create run", "Edit run", "List runs", "Cancel"]),
+            replyMarkup: BuildManageMainMenuMarkup(),
             cancellationToken: ct);
     }
 
@@ -356,6 +362,36 @@ public sealed class TelegramBotHostedService(
             cancellationToken: ct);
     }
 
+    private async Task HandleCallbackQueryAsync(CallbackQuery callbackQuery, CancellationToken ct)
+    {
+        var telegramUserId = callbackQuery.From.Id;
+        var chatId = callbackQuery.Message?.Chat.Id;
+        if (chatId is null || string.IsNullOrWhiteSpace(callbackQuery.Data))
+        {
+            await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: ct);
+            return;
+        }
+
+        try
+        {
+            if (!await repository.IsAdminAsync(telegramUserId, ct))
+            {
+                await botClient.AnswerCallbackQuery(callbackQuery.Id, "Admins only", cancellationToken: ct);
+                await botClient.SendMessage(chatId.Value, BuildNotAdminText(telegramUserId), cancellationToken: ct);
+                return;
+            }
+
+            await HandleManageCallbackAsync(chatId.Value, telegramUserId, callbackQuery, ct);
+            await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to process callback query for user {TelegramUserId}. Data: {Data}", telegramUserId, callbackQuery.Data);
+            await botClient.AnswerCallbackQuery(callbackQuery.Id, "Error", cancellationToken: ct);
+            await botClient.SendMessage(chatId.Value, "Unexpected error while processing your action. Please try again.", cancellationToken: ct);
+        }
+    }
+
     private async Task<bool> HandleManageMessageAsync(long chatId, long telegramUserId, string text, CancellationToken ct)
     {
         if (!_manageSessions.TryGetValue(telegramUserId, out var session))
@@ -372,7 +408,8 @@ public sealed class TelegramBotHostedService(
         switch (session.State)
         {
             case ManageState.MainMenu:
-                return await HandleManageMainMenuAsync(chatId, telegramUserId, text, session, ct);
+                await botClient.SendMessage(chatId, "Use the inline buttons below.", replyMarkup: BuildManageMainMenuMarkup(), cancellationToken: ct);
+                return true;
             case ManageState.CreateName:
             case ManageState.CreateDayOfWeek:
             case ManageState.CreateHour:
@@ -409,36 +446,184 @@ public sealed class TelegramBotHostedService(
         }
     }
 
-    private async Task<bool> HandleManageMainMenuAsync(long chatId, long telegramUserId, string text, ManageSession session, CancellationToken ct)
+    private async Task HandleManageCallbackAsync(long chatId, long telegramUserId, CallbackQuery callbackQuery, CancellationToken ct)
     {
-        switch (text.Trim())
+        var data = callbackQuery.Data!;
+        var session = _manageSessions.GetOrAdd(telegramUserId, _ => new ManageSession());
+
+        if (data == "manage:main")
         {
-            case "Create run":
-                session.State = ManageState.CreateName;
-                session.SelectedClubRunId = null;
-                await botClient.SendMessage(chatId, "Run name:", replyMarkup: BuildKeyboard(["Cancel"]), cancellationToken: ct);
-                return true;
-            case "Edit run":
-                session.State = ManageState.EditSelectRun;
-                await SendClubRunsListAsync(chatId, ct);
-                await botClient.SendMessage(chatId, "Send the club run id to edit.", replyMarkup: BuildKeyboard(["Back", "Cancel"]), cancellationToken: ct);
-                return true;
-            case "List runs":
-                await SendClubRunsListAsync(chatId, ct);
-                return true;
-            case "Cancel":
-                _manageSessions.TryRemove(telegramUserId, out _);
-                await botClient.SendMessage(chatId, "Manage mode closed.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
-                return true;
-            default:
-                await botClient.SendMessage(chatId, "Choose one of the menu options.", cancellationToken: ct);
-                return true;
+            session.State = ManageState.MainMenu;
+            session.SelectedClubRunId = null;
+            await botClient.SendMessage(chatId, "Manage club runs:", replyMarkup: BuildManageMainMenuMarkup(), cancellationToken: ct);
+            return;
+        }
+
+        if (data == "manage:cancel")
+        {
+            _manageSessions.TryRemove(telegramUserId, out _);
+            await botClient.SendMessage(chatId, "Manage mode closed.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+            return;
+        }
+
+        if (data == "manage:list")
+        {
+            await SendClubRunsListAsync(chatId, ct);
+            await botClient.SendMessage(chatId, "Manage club runs:", replyMarkup: BuildManageMainMenuMarkup(), cancellationToken: ct);
+            return;
+        }
+
+        if (data == "manage:create")
+        {
+            session.State = ManageState.CreateName;
+            session.SelectedClubRunId = null;
+            await botClient.SendMessage(chatId, "Run name:", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+            return;
+        }
+
+        if (data == "manage:edit:list")
+        {
+            var runs = await repository.GetClubRunsAsync(activeOnly: false, ct);
+            await botClient.SendMessage(chatId, "Choose a club run to edit:", replyMarkup: BuildClubRunsInlineMarkup(runs), cancellationToken: ct);
+            return;
+        }
+
+        if (data.StartsWith("manage:editrun:", StringComparison.Ordinal))
+        {
+            if (!long.TryParse(data["manage:editrun:".Length..], out var clubRunId))
+            {
+                return;
+            }
+
+            var clubRun = await repository.GetClubRunByIdAsync(clubRunId, ct);
+            if (clubRun is null)
+            {
+                await botClient.SendMessage(chatId, "Club run not found.", cancellationToken: ct);
+                return;
+            }
+
+            session.SelectedClubRunId = clubRun.Id;
+            session.Draft.Load(clubRun);
+            session.State = ManageState.EditMenu;
+            await botClient.SendMessage(chatId, BuildEditMenuText(clubRun), replyMarkup: BuildEditMenuMarkup(clubRun.Id), cancellationToken: ct);
+            return;
+        }
+
+        if (data.StartsWith("manage:edit:", StringComparison.Ordinal))
+        {
+            var parts = data.Split(':', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 4 || !long.TryParse(parts[3], out var clubRunId))
+            {
+                return;
+            }
+
+            var clubRun = await repository.GetClubRunByIdAsync(clubRunId, ct);
+            if (clubRun is null)
+            {
+                await botClient.SendMessage(chatId, "Club run not found.", cancellationToken: ct);
+                return;
+            }
+
+            session.SelectedClubRunId = clubRun.Id;
+            session.Draft.Load(clubRun);
+
+            switch (parts[2])
+            {
+                case "name":
+                    session.State = ManageState.EditName;
+                    await botClient.SendMessage(chatId, $"New name (current: {clubRun.Name}). Send 'skip' to cancel.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "day":
+                    session.State = ManageState.EditDayOfWeek;
+                    await botClient.SendMessage(chatId, $"Day of week (0=Sunday ... 6=Saturday, current: {clubRun.DayOfWeek}). Send 'skip' to cancel.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "hour":
+                    session.State = ManageState.EditHour;
+                    await botClient.SendMessage(chatId, $"Hour (0-23, current: {clubRun.Hour}). Send 'skip' to cancel.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "minutes":
+                    session.State = ManageState.EditMinuteFrom;
+                    await botClient.SendMessage(chatId, $"Minute from (0-59, current: {clubRun.MinuteFrom}). Send 'skip' to cancel.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "place":
+                    session.State = ManageState.EditStartLat;
+                    await botClient.SendMessage(chatId, $"Start latitude (current: {clubRun.StartLat.ToString("0.000000", CultureInfo.InvariantCulture)}). Send 'skip' to cancel.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "window":
+                    session.State = ManageState.EditWindowStart;
+                    await botClient.SendMessage(chatId, $"Window start local (HH:mm, current: {clubRun.WindowStartLocal}). Send 'skip' to cancel.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "report":
+                    session.State = ManageState.EditReportChat;
+                    await botClient.SendMessage(chatId, $"Report chat id (current: {FormatReportChatId(clubRun.ReportChatId)}). Send 'empty' to clear or 'skip' to cancel.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "members":
+                    session.State = ManageState.MemberMenu;
+                    await botClient.SendMessage(chatId, BuildMemberMenuText(clubRun), replyMarkup: BuildMemberMenuMarkup(clubRun.Id), cancellationToken: ct);
+                    return;
+                case "toggle":
+                    var updatedRun = await repository.UpsertClubRunAsync(BuildClubRunUpsert(session.Draft, clubRun.Id, !clubRun.IsActive), ct);
+                    session.Draft.Load(updatedRun);
+                    await botClient.SendMessage(chatId, $"Run is now {(updatedRun.IsActive ? "active" : "inactive")}.\n\n{BuildEditMenuText(updatedRun)}", replyMarkup: BuildEditMenuMarkup(updatedRun.Id), cancellationToken: ct);
+                    return;
+                case "run":
+                    var results = await attendanceJob.RunAsync(null, clubRun.Id, chatId, skipExistingReports: false, ct);
+                    await botClient.SendMessage(chatId, results.Count == 0 ? "Nothing to run." : "Run report posted to this chat.", replyMarkup: BuildEditMenuMarkup(clubRun.Id), cancellationToken: ct);
+                    return;
+                case "back":
+                    session.State = ManageState.MainMenu;
+                    session.SelectedClubRunId = null;
+                    await botClient.SendMessage(chatId, "Manage club runs:", replyMarkup: BuildManageMainMenuMarkup(), cancellationToken: ct);
+                    return;
+            }
+        }
+
+        if (data.StartsWith("manage:members:", StringComparison.Ordinal))
+        {
+            var parts = data.Split(':', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 4 || !long.TryParse(parts[3], out var clubRunId))
+            {
+                return;
+            }
+
+            var clubRun = await repository.GetClubRunByIdAsync(clubRunId, ct);
+            if (clubRun is null)
+            {
+                await botClient.SendMessage(chatId, "Club run not found.", cancellationToken: ct);
+                return;
+            }
+
+            session.SelectedClubRunId = clubRun.Id;
+            session.Draft.Load(clubRun);
+
+            switch (parts[2])
+            {
+                case "list":
+                    var members = await repository.GetClubRunMembersWithAuthAsync(clubRun.Id, ct);
+                    var memberText = members.Count == 0
+                        ? "No members."
+                        : string.Join('\n', members.Select(x => $"- {FormatUser(x.User)}"));
+                    await botClient.SendMessage(chatId, memberText, replyMarkup: BuildMemberMenuMarkup(clubRun.Id), cancellationToken: ct);
+                    return;
+                case "add":
+                    session.State = ManageState.AddMember;
+                    await botClient.SendMessage(chatId, "Send @username or Telegram user id. Send 'back' to return.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "remove":
+                    session.State = ManageState.RemoveMember;
+                    await botClient.SendMessage(chatId, "Send @username or Telegram user id. Send 'back' to return.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    return;
+                case "back":
+                    session.State = ManageState.EditMenu;
+                    await botClient.SendMessage(chatId, BuildEditMenuText(clubRun), replyMarkup: BuildEditMenuMarkup(clubRun.Id), cancellationToken: ct);
+                    return;
+            }
         }
     }
 
     private async Task<bool> HandleCreateFlowAsync(long chatId, long telegramUserId, string text, ManageSession session, CancellationToken ct)
     {
-        if (text.Equals("Cancel", StringComparison.OrdinalIgnoreCase))
+        if (IsCancelText(text))
         {
             _manageSessions.TryRemove(telegramUserId, out _);
             await botClient.SendMessage(chatId, "Manage mode closed.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
@@ -571,8 +756,8 @@ public sealed class TelegramBotHostedService(
                 _manageSessions[telegramUserId] = new ManageSession { State = ManageState.MainMenu };
                 await botClient.SendMessage(
                     chatId,
-                    $"Club run created: #{created.Id} {created.Name}",
-                    replyMarkup: BuildKeyboard(["Create run", "Edit run", "List runs", "Cancel"]),
+                    $"Club run created.\n\n{BuildEditMenuText(created)}",
+                    replyMarkup: BuildManageMainMenuMarkup(),
                     cancellationToken: ct);
                 return true;
             default:
@@ -582,40 +767,17 @@ public sealed class TelegramBotHostedService(
 
     private async Task<bool> HandleEditFlowAsync(long chatId, long telegramUserId, string text, ManageSession session, CancellationToken ct)
     {
-        if (text.Equals("Cancel", StringComparison.OrdinalIgnoreCase))
+        if (IsCancelText(text))
         {
             _manageSessions.TryRemove(telegramUserId, out _);
             await botClient.SendMessage(chatId, "Manage mode closed.", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
             return true;
         }
 
-        if (text.Equals("Back", StringComparison.OrdinalIgnoreCase))
-        {
-            session.State = ManageState.MainMenu;
-            session.SelectedClubRunId = null;
-            await botClient.SendMessage(chatId, "Manage club runs:", replyMarkup: BuildKeyboard(["Create run", "Edit run", "List runs", "Cancel"]), cancellationToken: ct);
-            return true;
-        }
-
         if (session.State == ManageState.EditSelectRun)
         {
-            if (!long.TryParse(text, out var clubRunId))
-            {
-                await botClient.SendMessage(chatId, "Send a numeric club run id.", cancellationToken: ct);
-                return true;
-            }
-
-            var clubRun = await repository.GetClubRunByIdAsync(clubRunId, ct);
-            if (clubRun is null)
-            {
-                await botClient.SendMessage(chatId, "Club run not found.", cancellationToken: ct);
-                return true;
-            }
-
-            session.SelectedClubRunId = clubRun.Id;
-            session.Draft.Load(clubRun);
-            session.State = ManageState.EditMenu;
-            await botClient.SendMessage(chatId, $"Editing #{clubRun.Id} {clubRun.Name}", replyMarkup: BuildKeyboard(["Edit name", "Edit day", "Edit hour", "Edit minutes", "Edit place", "Edit window", "Edit report chat", "Manage members", "Toggle active", "Run this", "Back", "Cancel"]), cancellationToken: ct);
+            var runs = await repository.GetClubRunsAsync(activeOnly: false, ct);
+            await botClient.SendMessage(chatId, "Choose a club run to edit using the inline buttons below.", replyMarkup: BuildClubRunsInlineMarkup(runs), cancellationToken: ct);
             return true;
         }
 
@@ -623,14 +785,40 @@ public sealed class TelegramBotHostedService(
         if (selectedRun is null)
         {
             session.State = ManageState.EditSelectRun;
-            await botClient.SendMessage(chatId, "Selected club run is missing. Send a run id.", cancellationToken: ct);
+            var runs = await repository.GetClubRunsAsync(activeOnly: false, ct);
+            await botClient.SendMessage(chatId, "Selected club run is missing. Choose a club run again.", replyMarkup: BuildClubRunsInlineMarkup(runs), cancellationToken: ct);
+            return true;
+        }
+
+        if (session.State == ManageState.EditMenu)
+        {
+            await botClient.SendMessage(chatId, "Use the inline buttons below.", replyMarkup: BuildEditMenuMarkup(selectedRun.Id), cancellationToken: ct);
+            return true;
+        }
+
+        if (session.State == ManageState.MemberMenu)
+        {
+            await botClient.SendMessage(chatId, "Use the inline buttons below.", replyMarkup: BuildMemberMenuMarkup(selectedRun.Id), cancellationToken: ct);
+            return true;
+        }
+
+        if (IsSkipText(text) || IsBackText(text))
+        {
+            if (session.State is ManageState.AddMember or ManageState.RemoveMember)
+            {
+                session.State = ManageState.MemberMenu;
+                await botClient.SendMessage(chatId, BuildMemberMenuText(selectedRun), replyMarkup: BuildMemberMenuMarkup(selectedRun.Id), cancellationToken: ct);
+                return true;
+            }
+
+            session.Draft.Load(selectedRun);
+            session.State = ManageState.EditMenu;
+            await botClient.SendMessage(chatId, BuildEditMenuText(selectedRun), replyMarkup: BuildEditMenuMarkup(selectedRun.Id), cancellationToken: ct);
             return true;
         }
 
         switch (session.State)
         {
-            case ManageState.EditMenu:
-                return await HandleEditMenuAsync(chatId, text, session, selectedRun, ct);
             case ManageState.EditName:
                 session.Draft.Name = text.Trim();
                 await SaveEditedRunAsync(chatId, session, selectedRun, ct);
@@ -661,7 +849,7 @@ public sealed class TelegramBotHostedService(
                 }
                 session.Draft.MinuteFrom = minuteFrom;
                 session.State = ManageState.EditMinuteTo;
-                await botClient.SendMessage(chatId, "Minute to:", cancellationToken: ct);
+                await botClient.SendMessage(chatId, $"Minute to (current: {selectedRun.MinuteTo}, >= {session.Draft.MinuteFrom}). Send 'skip' to cancel.", cancellationToken: ct);
                 return true;
             case ManageState.EditMinuteTo:
                 if (!int.TryParse(text, out var minuteTo) || minuteTo < session.Draft.MinuteFrom || minuteTo > 59)
@@ -680,7 +868,7 @@ public sealed class TelegramBotHostedService(
                 }
                 session.Draft.StartLat = startLat;
                 session.State = ManageState.EditStartLng;
-                await botClient.SendMessage(chatId, "Start longitude:", cancellationToken: ct);
+                await botClient.SendMessage(chatId, $"Start longitude (current: {selectedRun.StartLng.ToString("0.000000", CultureInfo.InvariantCulture)}). Send 'skip' to cancel.", cancellationToken: ct);
                 return true;
             case ManageState.EditStartLng:
                 if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var startLng))
@@ -709,7 +897,7 @@ public sealed class TelegramBotHostedService(
                 }
                 session.Draft.WindowStartLocal = text.Trim();
                 session.State = ManageState.EditWindowEnd;
-                await botClient.SendMessage(chatId, "Window end local (HH:mm):", cancellationToken: ct);
+                await botClient.SendMessage(chatId, $"Window end local (HH:mm, current: {selectedRun.WindowEndLocal}). Send 'skip' to cancel.", cancellationToken: ct);
                 return true;
             case ManageState.EditWindowEnd:
                 if (!IsValidTime(text))
@@ -719,7 +907,7 @@ public sealed class TelegramBotHostedService(
                 }
                 session.Draft.WindowEndLocal = text.Trim();
                 session.State = ManageState.EditTargetStart;
-                await botClient.SendMessage(chatId, "Target start local (HH:mm):", cancellationToken: ct);
+                await botClient.SendMessage(chatId, $"Target start local (HH:mm, current: {selectedRun.TargetStartLocal}). Send 'skip' to cancel.", cancellationToken: ct);
                 return true;
             case ManageState.EditTargetStart:
                 if (!IsValidTime(text))
@@ -731,95 +919,18 @@ public sealed class TelegramBotHostedService(
                 await SaveEditedRunAsync(chatId, session, selectedRun, ct);
                 return true;
             case ManageState.EditReportChat:
-                if (!text.Equals("skip", StringComparison.OrdinalIgnoreCase) && !long.TryParse(text, out var reportChatId))
+                if (!text.Equals("empty", StringComparison.OrdinalIgnoreCase) && !long.TryParse(text, out var reportChatId))
                 {
-                    await botClient.SendMessage(chatId, "Enter numeric chat id or 'skip'.", cancellationToken: ct);
+                    await botClient.SendMessage(chatId, "Enter numeric chat id, 'empty', or 'skip'.", cancellationToken: ct);
                     return true;
                 }
-                session.Draft.ReportChatId = text.Equals("skip", StringComparison.OrdinalIgnoreCase) ? null : long.Parse(text, CultureInfo.InvariantCulture);
+                session.Draft.ReportChatId = text.Equals("empty", StringComparison.OrdinalIgnoreCase) ? null : long.Parse(text, CultureInfo.InvariantCulture);
                 await SaveEditedRunAsync(chatId, session, selectedRun, ct);
                 return true;
-            case ManageState.MemberMenu:
-                return await HandleMemberMenuAsync(chatId, text, session, selectedRun, ct);
             case ManageState.AddMember:
                 return await HandleAddMemberAsync(chatId, text, session, selectedRun, ct);
             case ManageState.RemoveMember:
                 return await HandleRemoveMemberAsync(chatId, text, session, selectedRun, ct);
-            default:
-                return false;
-        }
-    }
-
-    private async Task<bool> HandleEditMenuAsync(long chatId, string text, ManageSession session, ClubRunRecord selectedRun, CancellationToken ct)
-    {
-        switch (text.Trim())
-        {
-            case "Edit name":
-                session.State = ManageState.EditName;
-                await botClient.SendMessage(chatId, "New name:", cancellationToken: ct);
-                return true;
-            case "Edit day":
-                session.State = ManageState.EditDayOfWeek;
-                await botClient.SendMessage(chatId, "Day of week (0=Sunday ... 6=Saturday):", cancellationToken: ct);
-                return true;
-            case "Edit hour":
-                session.State = ManageState.EditHour;
-                await botClient.SendMessage(chatId, "Hour (0-23):", cancellationToken: ct);
-                return true;
-            case "Edit minutes":
-                session.State = ManageState.EditMinuteFrom;
-                await botClient.SendMessage(chatId, "Minute from (0-59):", cancellationToken: ct);
-                return true;
-            case "Edit place":
-                session.State = ManageState.EditStartLat;
-                await botClient.SendMessage(chatId, "Start latitude:", cancellationToken: ct);
-                return true;
-            case "Edit window":
-                session.State = ManageState.EditWindowStart;
-                await botClient.SendMessage(chatId, "Window start local (HH:mm):", cancellationToken: ct);
-                return true;
-            case "Edit report chat":
-                session.State = ManageState.EditReportChat;
-                await botClient.SendMessage(chatId, "Report chat id or 'skip':", cancellationToken: ct);
-                return true;
-            case "Manage members":
-                session.State = ManageState.MemberMenu;
-                await botClient.SendMessage(chatId, "Members:", replyMarkup: BuildKeyboard(["List members", "Add member", "Remove member", "Back", "Cancel"]), cancellationToken: ct);
-                return true;
-            case "Toggle active":
-                var updatedRun = await repository.UpsertClubRunAsync(BuildClubRunUpsert(session.Draft, selectedRun.Id, !selectedRun.IsActive), ct);
-                session.Draft.Load(updatedRun);
-                await botClient.SendMessage(chatId, $"Run is now {(updatedRun.IsActive ? "active" : "inactive")}.", cancellationToken: ct);
-                return true;
-            case "Run this":
-                var results = await attendanceJob.RunAsync(null, selectedRun.Id, chatId, skipExistingReports: false, ct);
-                await botClient.SendMessage(chatId, results.Count == 0 ? "Nothing to run." : "Run report posted to this chat.", cancellationToken: ct);
-                return true;
-            default:
-                await botClient.SendMessage(chatId, "Choose one of the edit actions.", cancellationToken: ct);
-                return true;
-        }
-    }
-
-    private async Task<bool> HandleMemberMenuAsync(long chatId, string text, ManageSession session, ClubRunRecord selectedRun, CancellationToken ct)
-    {
-        switch (text.Trim())
-        {
-            case "List members":
-                var members = await repository.GetClubRunMembersWithAuthAsync(selectedRun.Id, ct);
-                var memberText = members.Count == 0
-                    ? "No members."
-                    : string.Join('\n', members.Select(x => $"- {FormatUser(x.User)}"));
-                await botClient.SendMessage(chatId, memberText, cancellationToken: ct);
-                return true;
-            case "Add member":
-                session.State = ManageState.AddMember;
-                await botClient.SendMessage(chatId, "Send @username or Telegram user id.", cancellationToken: ct);
-                return true;
-            case "Remove member":
-                session.State = ManageState.RemoveMember;
-                await botClient.SendMessage(chatId, "Send @username or Telegram user id.", cancellationToken: ct);
-                return true;
             default:
                 return false;
         }
@@ -836,7 +947,7 @@ public sealed class TelegramBotHostedService(
 
         await repository.AddClubRunMemberAsync(selectedRun.Id, user.Id, ct);
         session.State = ManageState.MemberMenu;
-        await botClient.SendMessage(chatId, $"Added {FormatUser(user)} to {selectedRun.Name}.", replyMarkup: BuildKeyboard(["List members", "Add member", "Remove member", "Back", "Cancel"]), cancellationToken: ct);
+        await botClient.SendMessage(chatId, $"Added {FormatUser(user)} to {selectedRun.Name}.", replyMarkup: BuildMemberMenuMarkup(selectedRun.Id), cancellationToken: ct);
         return true;
     }
 
@@ -851,16 +962,16 @@ public sealed class TelegramBotHostedService(
 
         await repository.RemoveClubRunMemberAsync(selectedRun.Id, user.Id, ct);
         session.State = ManageState.MemberMenu;
-        await botClient.SendMessage(chatId, $"Removed {FormatUser(user)} from {selectedRun.Name}.", replyMarkup: BuildKeyboard(["List members", "Add member", "Remove member", "Back", "Cancel"]), cancellationToken: ct);
+        await botClient.SendMessage(chatId, $"Removed {FormatUser(user)} from {selectedRun.Name}.", replyMarkup: BuildMemberMenuMarkup(selectedRun.Id), cancellationToken: ct);
         return true;
     }
 
     private async Task SaveEditedRunAsync(long chatId, ManageSession session, ClubRunRecord selectedRun, CancellationToken ct)
     {
-        await repository.UpsertClubRunAsync(BuildClubRunUpsert(session.Draft, selectedRun.Id, selectedRun.IsActive), ct);
-        session.Draft.Load((await repository.GetClubRunByIdAsync(selectedRun.Id, ct))!);
+        var updatedRun = await repository.UpsertClubRunAsync(BuildClubRunUpsert(session.Draft, selectedRun.Id, selectedRun.IsActive), ct);
+        session.Draft.Load(updatedRun);
         session.State = ManageState.EditMenu;
-        await botClient.SendMessage(chatId, "Run updated.", replyMarkup: BuildKeyboard(["Edit name", "Edit day", "Edit hour", "Edit minutes", "Edit place", "Edit window", "Edit report chat", "Manage members", "Toggle active", "Run this", "Back", "Cancel"]), cancellationToken: ct);
+        await botClient.SendMessage(chatId, $"Run updated.\n\n{BuildEditMenuText(updatedRun)}", replyMarkup: BuildEditMenuMarkup(updatedRun.Id), cancellationToken: ct);
     }
 
     private async Task SendClubRunsListAsync(long chatId, CancellationToken ct)
@@ -984,6 +1095,21 @@ public sealed class TelegramBotHostedService(
         return TimeSpan.TryParseExact(value.Trim(), @"hh\:mm", CultureInfo.InvariantCulture, out _);
     }
 
+    private static bool IsCancelText(string text)
+    {
+        return text.Equals("cancel", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsBackText(string text)
+    {
+        return text.Equals("back", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSkipText(string text)
+    {
+        return text.Equals("skip", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static ClubRunUpsert BuildClubRunUpsert(ClubRunDraft draft, long? id, bool isActive)
     {
         return new ClubRunUpsert(
@@ -1076,13 +1202,111 @@ public sealed class TelegramBotHostedService(
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static ReplyKeyboardMarkup BuildKeyboard(string[] buttons)
+    private static string BuildEditMenuText(ClubRunRecord clubRun)
     {
-        return new ReplyKeyboardMarkup(buttons.Select(x => new KeyboardButton[] { x }))
-        {
-            ResizeKeyboard = true,
-            OneTimeKeyboard = false
-        };
+        return $"Editing club run:\n{BuildClubRunSummary(clubRun)}";
+    }
+
+    private static string BuildMemberMenuText(ClubRunRecord clubRun)
+    {
+        return $"Manage members for #{clubRun.Id} {clubRun.Name}. Use the inline buttons below.";
+    }
+
+    private static string BuildClubRunSummary(ClubRunRecord clubRun)
+    {
+        return string.Join(
+            Environment.NewLine,
+            [
+                $"#{clubRun.Id} {clubRun.Name}",
+                $"Status: {(clubRun.IsActive ? "active" : "inactive")}",
+                $"Schedule: {(DayOfWeek)clubRun.DayOfWeek} {clubRun.Hour:D2}:{clubRun.MinuteFrom:D2}-{clubRun.Hour:D2}:{clubRun.MinuteTo:D2}",
+                $"Place: {clubRun.StartLat.ToString("0.000000", CultureInfo.InvariantCulture)}, {clubRun.StartLng.ToString("0.000000", CultureInfo.InvariantCulture)} | radius {clubRun.RadiusKm.ToString("0.##", CultureInfo.InvariantCulture)} km",
+                $"Window: {clubRun.WindowStartLocal}-{clubRun.WindowEndLocal} | target {clubRun.TargetStartLocal}",
+                $"Types: {clubRun.AllowedActivityTypes}",
+                $"Distance: {FormatDistanceRange(clubRun.MinDistanceKm, clubRun.MaxDistanceKm)}",
+                $"Report chat: {FormatReportChatId(clubRun.ReportChatId)}"
+            ]);
+    }
+
+    private static string FormatDistanceRange(double? minDistanceKm, double? maxDistanceKm)
+    {
+        var minText = minDistanceKm.HasValue ? $"{minDistanceKm.Value.ToString("0.##", CultureInfo.InvariantCulture)} km" : "any";
+        var maxText = maxDistanceKm.HasValue ? $"{maxDistanceKm.Value.ToString("0.##", CultureInfo.InvariantCulture)} km" : "any";
+        return $"{minText} - {maxText}";
+    }
+
+    private static string FormatReportChatId(long? reportChatId)
+    {
+        return reportChatId?.ToString(CultureInfo.InvariantCulture) ?? "not set";
+    }
+
+    private static InlineKeyboardMarkup BuildManageMainMenuMarkup()
+    {
+        return new InlineKeyboardMarkup([
+            [InlineKeyboardButton.WithCallbackData("Create run", "manage:create")],
+            [InlineKeyboardButton.WithCallbackData("Edit run", "manage:edit:list")],
+            [InlineKeyboardButton.WithCallbackData("List runs", "manage:list")],
+            [InlineKeyboardButton.WithCallbackData("Cancel", "manage:cancel")]
+        ]);
+    }
+
+    private static InlineKeyboardMarkup BuildClubRunsInlineMarkup(IReadOnlyList<ClubRunRecord> runs)
+    {
+        var rows = runs
+            .Select(run => new[]
+            {
+                InlineKeyboardButton.WithCallbackData($"#{run.Id} {run.Name}", $"manage:editrun:{run.Id}")
+            })
+            .ToList();
+
+        rows.Add([InlineKeyboardButton.WithCallbackData("Back", "manage:main")]);
+        rows.Add([InlineKeyboardButton.WithCallbackData("Cancel", "manage:cancel")]);
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    private static InlineKeyboardMarkup BuildEditMenuMarkup(long clubRunId)
+    {
+        return new InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton.WithCallbackData("Name", $"manage:edit:name:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Day", $"manage:edit:day:{clubRunId}")
+            ],
+            [
+                InlineKeyboardButton.WithCallbackData("Hour", $"manage:edit:hour:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Minutes", $"manage:edit:minutes:{clubRunId}")
+            ],
+            [
+                InlineKeyboardButton.WithCallbackData("Place", $"manage:edit:place:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Window", $"manage:edit:window:{clubRunId}")
+            ],
+            [
+                InlineKeyboardButton.WithCallbackData("Report chat", $"manage:edit:report:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Members", $"manage:edit:members:{clubRunId}")
+            ],
+            [
+                InlineKeyboardButton.WithCallbackData("Toggle active", $"manage:edit:toggle:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Run now", $"manage:edit:run:{clubRunId}")
+            ],
+            [
+                InlineKeyboardButton.WithCallbackData("Back", $"manage:edit:back:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Cancel", "manage:cancel")
+            ]
+        ]);
+    }
+
+    private static InlineKeyboardMarkup BuildMemberMenuMarkup(long clubRunId)
+    {
+        return new InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton.WithCallbackData("List members", $"manage:members:list:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Add member", $"manage:members:add:{clubRunId}")
+            ],
+            [
+                InlineKeyboardButton.WithCallbackData("Remove member", $"manage:members:remove:{clubRunId}"),
+                InlineKeyboardButton.WithCallbackData("Back", $"manage:members:back:{clubRunId}")
+            ],
+            [InlineKeyboardButton.WithCallbackData("Cancel", "manage:cancel")]
+        ]);
     }
 
     private sealed class LegacyImportSession(long chatId, StringBuilder buffer, int chunksCount)
