@@ -26,19 +26,18 @@ public sealed class StravaOptions
 
 public sealed class DatabaseOptions
 {
-    public string Path { get; init; } = "trc_bot.db";
+    public string Path { get; init; } = "clubruns.db";
 }
 
 public sealed class ScheduleOptions
 {
-    // Global scheduler window in Tbilisi local time.
-    public DayOfWeek DayOfWeek { get; init; } = DayOfWeek.Friday;
-    public int Hour { get; init; } = 12;
-    public int MinuteFrom { get; init; } = 0;
-    public int MinuteTo { get; init; } = 10;
+    // Default timezone used for new clubs and as a fallback when a club has no timezone configured.
+    public string TimeZoneId { get; init; } = "Asia/Tbilisi";
 }
 
 public sealed class LoggingOptions
 {
-    public string LogPath { get; init; } = "logs/trc-bot-.log";
+    public string LogPath { get; init; } = "logs/clubruns-.log";
 }
+
+

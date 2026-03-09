@@ -42,9 +42,10 @@ public sealed record AttendanceView(
     long? ActivityId,
     string MatchedReason);
 
-// club_runs table row
+// Current recurring run template used by the bot UI.
 public sealed record ClubRunRecord(
     long Id,
+    long ClubId,
     string Name,
     string Slug,
     bool IsActive,
@@ -58,6 +59,7 @@ public sealed record ClubRunRecord(
     string WindowStartLocal,
     string WindowEndLocal,
     string TargetStartLocal,
+    string CheckAtLocal,
     string AllowedActivityTypes,
     double? MinDistanceKm,
     double? MaxDistanceKm,
@@ -65,15 +67,10 @@ public sealed record ClubRunRecord(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
-// club_run_members table row
-public sealed record ClubRunMemberRecord(
-    long ClubRunId,
-    long UserId,
-    DateTimeOffset AddedAt);
 
-// write model used by the bot management flow
 public sealed record ClubRunUpsert(
     long? Id,
+    long ClubId,
     string Name,
     string Slug,
     bool IsActive,
@@ -87,27 +84,49 @@ public sealed record ClubRunUpsert(
     string WindowStartLocal,
     string WindowEndLocal,
     string TargetStartLocal,
+    string CheckAtLocal,
     string AllowedActivityTypes,
     double? MinDistanceKm,
     double? MaxDistanceKm,
     long? ReportChatId);
 
-// club_run_reports table row
-public sealed record ClubRunReportRecord(
-    long ClubRunId,
-    string RunDate,
-    DateTimeOffset GeneratedAt,
-    int TotalUsers,
-    int FoundCount);
+public sealed record ClubRecord(
+    long Id,
+    string Slug,
+    string Name,
+    string TimeZoneId,
+    bool IsActive,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
 
-// club_run_attendance upsert payload
-public sealed record ClubRunAttendanceUpsert(
+public sealed record EventInstanceRecord(
+    long Id,
     long ClubRunId,
-    string RunDate,
+    string EventDateLocal,
+    DateTimeOffset StartsAtUtc,
+    DateTimeOffset WindowStartUtc,
+    DateTimeOffset WindowEndUtc,
+    string Status,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record EventRegistrationRecord(
+    long EventInstanceId,
     long UserId,
-    long? ActivityId,
-    DateTimeOffset? StartDateLocal,
+    string Status,
+    DateTimeOffset RegisteredAtUtc,
+    string Source);
+
+public sealed record EventResultUpsert(
+    long EventInstanceId,
+    long UserId,
+    string Status,
+    long? StravaActivityId,
+    DateTimeOffset? MatchedAtUtc,
+    DateTimeOffset? ActivityStartUtc,
+    string? ActivityStartLocal,
     double? StartLat,
     double? StartLng,
     double? DistanceKm,
-    string MatchedReason);
+    string? MatchedReason,
+    string? ErrorMessage);

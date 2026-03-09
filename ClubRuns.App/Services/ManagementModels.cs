@@ -6,6 +6,9 @@ public enum ManageState
 {
     None,
     MainMenu,
+    CreateClubName,
+    CreateClubTimeZone,
+    CreateSelectClub,
     CreateName,
     CreateDayOfWeek,
     CreateHour,
@@ -17,7 +20,9 @@ public enum ManageState
     CreateWindowStart,
     CreateWindowEnd,
     CreateTargetStart,
+    CreateCheckAt,
     CreateReportChat,
+    EditSelectClub,
     EditSelectRun,
     EditMenu,
     EditName,
@@ -31,21 +36,21 @@ public enum ManageState
     EditWindowStart,
     EditWindowEnd,
     EditTargetStart,
-    EditReportChat,
-    MemberMenu,
-    AddMember,
-    RemoveMember
+    EditCheckAt,
+    EditReportChat
 }
 
 public sealed class ManageSession
 {
     public ManageState State { get; set; }
     public ClubRunDraft Draft { get; } = new();
+    public long? SelectedClubId { get; set; }
     public long? SelectedClubRunId { get; set; }
 }
 
 public sealed class ClubRunDraft
 {
+    public long ClubId { get; set; }
     public string Name { get; set; } = string.Empty;
     public int DayOfWeek { get; set; }
     public int Hour { get; set; }
@@ -57,10 +62,12 @@ public sealed class ClubRunDraft
     public string WindowStartLocal { get; set; } = "05:00";
     public string WindowEndLocal { get; set; } = "10:00";
     public string TargetStartLocal { get; set; } = "08:00";
+    public string CheckAtLocal { get; set; } = "12:00";
     public long? ReportChatId { get; set; }
 
     public void Load(ClubRunRecord clubRun)
     {
+        ClubId = clubRun.ClubId;
         Name = clubRun.Name;
         DayOfWeek = clubRun.DayOfWeek;
         Hour = clubRun.Hour;
@@ -72,6 +79,14 @@ public sealed class ClubRunDraft
         WindowStartLocal = clubRun.WindowStartLocal;
         WindowEndLocal = clubRun.WindowEndLocal;
         TargetStartLocal = clubRun.TargetStartLocal;
+        CheckAtLocal = clubRun.CheckAtLocal;
         ReportChatId = clubRun.ReportChatId;
     }
 }
+
+
+
+
+
+
+

@@ -1,4 +1,6 @@
+using System.Globalization;
 using ClubRuns.App.Config;
+using ClubRuns.App.Data;
 using Microsoft.Extensions.Options;
 
 namespace ClubRuns.App.Services;
@@ -6,10 +8,10 @@ namespace ClubRuns.App.Services;
 public sealed class SchedulerService(
     ILogger<SchedulerService> logger,
     AttendanceJobService attendanceJob,
+    SqliteRepository repository,
     IOptions<AppOptions> options) : BackgroundService
 {
-    private readonly AppOptions _options = options.Value;
-    private static readonly TimeZoneInfo TbilisiTimeZone = ResolveTbilisiTimeZone();
+    private readonly string _defaultTimeZoneId = options.Value.Schedule.TimeZoneId;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -17,23 +19,27 @@ public sealed class SchedulerService(
         {
             try
             {
-                var now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TbilisiTimeZone);
-                var schedule = _options.Schedule;
-                ValidateSchedule(schedule);
-
-                if (IsInsideScheduleWindow(now, schedule))
+                var dueRuns = await GetDueRunsAsync(DateTimeOffset.UtcNow, stoppingToken);
+                foreach (var dueRun in dueRuns)
                 {
-                    await TryRunForDateAsync(DateOnly.FromDateTime(now.DateTime), stoppingToken);
+                    logger.LogInformation(
+                        "Starting scheduled attendance check for club run {ClubRunId} on {RunDate} at {DueAtUtc}",
+                        dueRun.ClubRun.Id,
+                        dueRun.RunDate,
+                        dueRun.DueAtUtc);
+
+                    var runDate = DateOnly.ParseExact(dueRun.RunDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+                    await attendanceJob.RunAsync(runDate.ToDateTime(TimeOnly.MinValue), dueRun.ClubRun.Id, null, skipExistingReports: true, stoppingToken);
                 }
 
-                var nextLocal = GetNextWindowStart(now, schedule);
-                var delay = nextLocal - now;
-                if (delay < TimeSpan.Zero)
+                var nextDueAtUtc = await GetNextDueAtUtcAsync(DateTimeOffset.UtcNow, stoppingToken);
+                var delay = nextDueAtUtc - DateTimeOffset.UtcNow;
+                if (delay < TimeSpan.FromMinutes(1))
                 {
-                    delay = TimeSpan.Zero;
+                    delay = TimeSpan.FromMinutes(1);
                 }
 
-                logger.LogInformation("Next scheduled check at {NextLocal}", nextLocal);
+                logger.LogInformation("Next scheduled check at {NextDueAtUtc}", nextDueAtUtc);
                 await Task.Delay(delay, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -43,74 +49,121 @@ public sealed class SchedulerService(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Error in scheduler loop");
-                await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
             }
         }
     }
 
-    private async Task TryRunForDateAsync(DateOnly localDate, CancellationToken ct)
+    private async Task<List<DueRun>> GetDueRunsAsync(DateTimeOffset nowUtc, CancellationToken ct)
     {
-        logger.LogInformation("Starting scheduled club run check for {RunDate}", localDate);
-        await attendanceJob.RunAsync(localDate.ToDateTime(TimeOnly.MinValue), null, null, skipExistingReports: true, ct);
-    }
+        var runs = await repository.GetClubRunsAsync(activeOnly: true, ct: ct);
+        var dueRuns = new List<DueRun>();
 
-    private static bool IsInsideScheduleWindow(DateTimeOffset now, ScheduleOptions schedule)
-    {
-        if (now.DayOfWeek != schedule.DayOfWeek || now.Hour != schedule.Hour)
+        foreach (var clubRun in runs)
         {
-            return false;
-        }
-
-        return now.Minute >= schedule.MinuteFrom && now.Minute <= schedule.MinuteTo;
-    }
-
-    private static DateTimeOffset GetNextWindowStart(DateTimeOffset now, ScheduleOptions schedule)
-    {
-        var localNow = now.DateTime;
-        var dayDiff = ((int)schedule.DayOfWeek - (int)localNow.DayOfWeek + 7) % 7;
-        var candidateDate = localNow.Date.AddDays(dayDiff);
-        var candidateLocal = candidateDate.AddHours(schedule.Hour).AddMinutes(schedule.MinuteFrom);
-        var candidateOffset = new DateTimeOffset(candidateLocal, now.Offset);
-
-        if (candidateOffset <= now)
-        {
-            candidateOffset = candidateOffset.AddDays(7);
-        }
-
-        return candidateOffset;
-    }
-
-    private static void ValidateSchedule(ScheduleOptions schedule)
-    {
-        if (schedule.Hour is < 0 or > 23)
-        {
-            throw new InvalidOperationException("Schedule.Hour must be in range 0..23.");
-        }
-
-        if (schedule.MinuteFrom is < 0 or > 59 || schedule.MinuteTo is < 0 or > 59)
-        {
-            throw new InvalidOperationException("Schedule.MinuteFrom and Schedule.MinuteTo must be in range 0..59.");
-        }
-
-        if (schedule.MinuteFrom > schedule.MinuteTo)
-        {
-            throw new InvalidOperationException("Schedule.MinuteFrom must be less than or equal to Schedule.MinuteTo.");
-        }
-    }
-
-    private static TimeZoneInfo ResolveTbilisiTimeZone()
-    {
-        foreach (var id in new[] { "Asia/Tbilisi", "Georgian Standard Time" })
-        {
-            try
+            var club = await repository.GetClubByIdAsync(clubRun.ClubId, ct);
+            if (club is null || !club.IsActive)
             {
-                return TimeZoneInfo.FindSystemTimeZoneById(id);
+                continue;
             }
-            catch
+
+            var timeZone = ResolveTimeZone(string.IsNullOrWhiteSpace(club.TimeZoneId) ? _defaultTimeZoneId : club.TimeZoneId);
+            var nowLocal = TimeZoneInfo.ConvertTime(nowUtc, timeZone);
+            var targetDate = DateOnly.FromDateTime(nowLocal.DateTime);
+            if ((int)targetDate.DayOfWeek != clubRun.DayOfWeek)
             {
+                continue;
+            }
+
+            var dueAtUtc = BuildDueAtUtc(targetDate, clubRun.CheckAtLocal, timeZone);
+            if (dueAtUtc > nowUtc)
+            {
+                continue;
+            }
+
+            var eventInstance = await repository.GetEventInstanceAsync(clubRun.Id, targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), ct);
+            if (eventInstance is not null && await repository.EventReportExistsAsync(eventInstance.Id, ct))
+            {
+                continue;
+            }
+
+            dueRuns.Add(new DueRun(clubRun, targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), dueAtUtc));
+        }
+
+        return dueRuns.OrderBy(x => x.DueAtUtc).ToList();
+    }
+
+    private async Task<DateTimeOffset> GetNextDueAtUtcAsync(DateTimeOffset nowUtc, CancellationToken ct)
+    {
+        var runs = await repository.GetClubRunsAsync(activeOnly: true, ct: ct);
+        DateTimeOffset? nextDueAtUtc = null;
+
+        foreach (var clubRun in runs)
+        {
+            var club = await repository.GetClubByIdAsync(clubRun.ClubId, ct);
+            if (club is null || !club.IsActive)
+            {
+                continue;
+            }
+
+            var timeZone = ResolveTimeZone(string.IsNullOrWhiteSpace(club.TimeZoneId) ? _defaultTimeZoneId : club.TimeZoneId);
+            var candidate = GetNextDueAtUtc(clubRun, nowUtc, timeZone);
+            if (!nextDueAtUtc.HasValue || candidate < nextDueAtUtc.Value)
+            {
+                nextDueAtUtc = candidate;
             }
         }
 
-        throw new InvalidOperationException("Cannot resolve timezone for Asia/Tbilisi.");
+        return nextDueAtUtc ?? nowUtc.AddHours(1);
     }
+
+    private static DateTimeOffset GetNextDueAtUtc(ClubRunRecord clubRun, DateTimeOffset nowUtc, TimeZoneInfo timeZone)
+    {
+        var nowLocal = TimeZoneInfo.ConvertTime(nowUtc, timeZone);
+        var currentDate = DateOnly.FromDateTime(nowLocal.DateTime);
+        var dayDiff = ((clubRun.DayOfWeek - (int)currentDate.DayOfWeek) + 7) % 7;
+        var targetDate = currentDate.AddDays(dayDiff);
+        var candidate = BuildDueAtUtc(targetDate, clubRun.CheckAtLocal, timeZone);
+
+        if (candidate <= nowUtc)
+        {
+            targetDate = targetDate.AddDays(7);
+            candidate = BuildDueAtUtc(targetDate, clubRun.CheckAtLocal, timeZone);
+        }
+
+        return candidate;
+    }
+
+    private static DateTimeOffset BuildDueAtUtc(DateOnly date, string checkAtLocal, TimeZoneInfo timeZone)
+    {
+        var localTime = TimeSpan.ParseExact(checkAtLocal, @"hh\:mm", CultureInfo.InvariantCulture);
+        var localDateTime = date.ToDateTime(TimeOnly.MinValue).Add(localTime);
+        var utc = TimeZoneInfo.ConvertTimeToUtc(localDateTime, timeZone);
+        return new DateTimeOffset(utc, TimeSpan.Zero);
+    }
+
+    private static TimeZoneInfo ResolveTimeZone(string timeZoneId)
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        }
+        catch
+        {
+            foreach (var id in new[] { "Asia/Tbilisi", "Georgian Standard Time" })
+            {
+                try
+                {
+                    return TimeZoneInfo.FindSystemTimeZoneById(id);
+                }
+                catch
+                {
+                }
+            }
+
+            throw new InvalidOperationException($"Cannot resolve timezone '{timeZoneId}'.");
+        }
+    }
+
+    private sealed record DueRun(ClubRunRecord ClubRun, string RunDate, DateTimeOffset DueAtUtc);
 }

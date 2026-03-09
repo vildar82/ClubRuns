@@ -1,5 +1,7 @@
 using System.Globalization;
+using ClubRuns.App.Config;
 using ClubRuns.App.Data;
+using Microsoft.Extensions.Options;
 using Telegram.Bot;
 
 namespace ClubRuns.App.Services;
@@ -7,10 +9,12 @@ namespace ClubRuns.App.Services;
 public sealed class AttendanceJobService(
     SqliteRepository repository,
     StravaApiClient stravaApi,
+    StravaRequestScheduler stravaRequestScheduler,
     ITelegramBotClient telegramBot,
+    IOptions<AppOptions> options,
     ILogger<AttendanceJobService> logger)
 {
-    private static readonly TimeZoneInfo TbilisiTimeZone = ResolveTbilisiTimeZone();
+    private readonly string _defaultTimeZoneId = options.Value.Schedule.TimeZoneId;
 
     public async Task<List<ClubRunAttendanceResult>> RunAsync(
         DateTime? targetLocalDate = null,
@@ -19,8 +23,7 @@ public sealed class AttendanceJobService(
         bool skipExistingReports = false,
         CancellationToken ct = default)
     {
-        var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TbilisiTimeZone);
-        var targetDate = DateOnly.FromDateTime((targetLocalDate ?? nowLocal.Date).Date);
+        var targetDate = DateOnly.FromDateTime((targetLocalDate ?? DateTime.UtcNow).Date);
 
         List<ClubRunRecord> runs;
         if (specificClubRunId.HasValue)
@@ -30,7 +33,7 @@ public sealed class AttendanceJobService(
         }
         else
         {
-            runs = await repository.GetClubRunsForDayAsync(targetDate.DayOfWeek, activeOnly: true, ct);
+            runs = await repository.GetClubRunsForDayAsync(targetDate.DayOfWeek, activeOnly: true, ct: ct);
         }
 
         var results = new List<ClubRunAttendanceResult>();
@@ -53,23 +56,35 @@ public sealed class AttendanceJobService(
         bool skipExistingReports,
         CancellationToken ct)
     {
+        var club = await repository.GetClubByIdAsync(clubRun.ClubId, ct) ?? throw new InvalidOperationException($"Club {clubRun.ClubId} not found for run {clubRun.Id}.");
+        var clubTimeZone = ResolveTimeZone(string.IsNullOrWhiteSpace(club.TimeZoneId) ? _defaultTimeZoneId : club.TimeZoneId);
         var runDate = targetDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        if (skipExistingReports && await repository.ClubRunReportExistsAsync(clubRun.Id, runDate, ct))
+        var windowStartLocalTime = ParseLocalTime(clubRun.WindowStartLocal);
+        var windowEndLocalTime = ParseLocalTime(clubRun.WindowEndLocal);
+        var targetStartLocalTime = ParseLocalTime(clubRun.TargetStartLocal);
+        var eventStartLocal = new TimeSpan(clubRun.Hour, clubRun.MinuteFrom, 0);
+
+        var eventInstance = await repository.EnsureEventInstanceAsync(
+            clubRun.Id,
+            runDate,
+            ToUtc(targetDate, eventStartLocal, clubTimeZone),
+            ToUtc(targetDate, windowStartLocalTime, clubTimeZone),
+            ToUtc(targetDate, windowEndLocalTime, clubTimeZone),
+            ct);
+
+        if (skipExistingReports && await repository.EventReportExistsAsync(eventInstance.Id, ct))
         {
-            logger.LogInformation("Club run report already exists for {ClubRunId} {RunDate}", clubRun.Id, runDate);
+            logger.LogInformation("Event report already exists for event instance {EventInstanceId}", eventInstance.Id);
             return null;
         }
 
-        var users = await repository.GetClubRunMembersWithAuthAsync(clubRun.Id, ct);
+        var users = await repository.GetEventRegistrationsWithAuthAsync(eventInstance.Id, ct);
         var found = new List<AttendanceUserResult>();
         var notFound = new List<AttendanceUserResult>();
         var errors = new List<AttendanceUserResult>();
 
-        var windowStart = ParseLocalTime(clubRun.WindowStartLocal);
-        var windowEnd = ParseLocalTime(clubRun.WindowEndLocal);
-        var targetStart = ParseLocalTime(clubRun.TargetStartLocal);
-        var after = ToUnixInTbilisi(targetDate.ToDateTime(TimeOnly.MinValue).Add(windowStart));
-        var before = ToUnixInTbilisi(targetDate.ToDateTime(TimeOnly.MinValue).Add(windowEnd));
+        var after = eventInstance.WindowStartUtc.ToUnixTimeSeconds();
+        var before = eventInstance.WindowEndUtc.ToUnixTimeSeconds();
 
         foreach (var userWithAuth in users)
         {
@@ -78,8 +93,8 @@ public sealed class AttendanceJobService(
             {
                 var item = new AttendanceUserResult(user, false, null, "No Strava connection", false, null);
                 notFound.Add(item);
-                await repository.UpsertClubRunAttendanceAsync(
-                    new ClubRunAttendanceUpsert(clubRun.Id, runDate, user.Id, null, null, null, null, null, item.Reason),
+                await repository.UpsertEventResultAsync(
+                    new EventResultUpsert(eventInstance.Id, user.Id, "not_found", null, null, null, null, null, null, null, item.Reason, null),
                     ct);
                 continue;
             }
@@ -108,19 +123,26 @@ public sealed class AttendanceJobService(
                         DateTimeOffset.UtcNow);
                 }
 
-                var activities = await stravaApi.GetActivitiesAsync(auth.AccessToken, after, before, ct);
-                var best = FindBestMatch(clubRun, activities, windowStart, windowEnd, targetStart);
+                var activities = await stravaRequestScheduler.ExecuteReadAsync(
+                    eventInstance.Id,
+                    user.Id,
+                    "list_activities",
+                    token => stravaApi.GetActivitiesAsync(auth.AccessToken, after, before, token),
+                    ct);
+
+                var best = FindBestMatch(clubRun, activities, windowStartLocalTime, windowEndLocalTime, targetStartLocalTime);
                 if (best is null)
                 {
                     var item = new AttendanceUserResult(user, false, null, "No matching activity", false, null);
                     notFound.Add(item);
-                    await repository.UpsertClubRunAttendanceAsync(
-                        new ClubRunAttendanceUpsert(clubRun.Id, runDate, user.Id, null, null, null, null, null, item.Reason),
+                    await repository.UpsertEventResultAsync(
+                        new EventResultUpsert(eventInstance.Id, user.Id, "not_found", null, null, null, null, null, null, null, item.Reason, null),
                         ct);
                     continue;
                 }
 
                 var startLocal = ParseStravaLocal(best.StartDateLocal);
+                var startUtc = ParseStravaUtc(best.StartDateUtc);
                 var lat = best.StartLatLng![0];
                 var lng = best.StartLatLng![1];
                 var distanceKm = best.DistanceMeters / 1000.0;
@@ -128,31 +150,34 @@ public sealed class AttendanceJobService(
                 var foundItem = new AttendanceUserResult(user, true, best.Id, reason, false, null);
                 found.Add(foundItem);
 
-                await repository.UpsertClubRunAttendanceAsync(
-                    new ClubRunAttendanceUpsert(
-                        clubRun.Id,
-                        runDate,
+                await repository.UpsertEventResultAsync(
+                    new EventResultUpsert(
+                        eventInstance.Id,
                         user.Id,
+                        "found",
                         best.Id,
-                        new DateTimeOffset(startLocal, TbilisiTimeZone.GetUtcOffset(startLocal)),
+                        DateTimeOffset.UtcNow,
+                        startUtc,
+                        best.StartDateLocal,
                         lat,
                         lng,
                         distanceKm,
-                        foundItem.Reason),
+                        foundItem.Reason,
+                        null),
                     ct);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed processing club run {ClubRunId} user {TelegramUserId}", clubRun.Id, user.TelegramUserId);
+                logger.LogError(ex, "Failed processing event instance {EventInstanceId} user {TelegramUserId}", eventInstance.Id, user.TelegramUserId);
                 var item = new AttendanceUserResult(user, false, null, "User processing error", true, ex.Message);
                 errors.Add(item);
-                await repository.UpsertClubRunAttendanceAsync(
-                    new ClubRunAttendanceUpsert(clubRun.Id, runDate, user.Id, null, null, null, null, null, $"error: {ex.Message}"),
+                await repository.UpsertEventResultAsync(
+                    new EventResultUpsert(eventInstance.Id, user.Id, "error", null, null, null, null, null, null, null, item.Reason, ex.Message),
                     ct);
             }
         }
 
-        await repository.SaveClubRunReportAsync(clubRun.Id, runDate, users.Count, found.Count, ct);
+        await repository.SaveEventReportAsync(eventInstance.Id, users.Count, found.Count, notFound.Count, errors.Count, publishChatId ?? clubRun.ReportChatId, ct);
         var result = new ClubRunAttendanceResult(clubRun, runDate, found, notFound, errors);
 
         var destinationChatId = publishChatId ?? clubRun.ReportChatId;
@@ -231,10 +256,14 @@ public sealed class AttendanceJobService(
 
     private static TimeSpan ParseLocalTime(string value) => TimeSpan.ParseExact(value, @"hh\:mm", CultureInfo.InvariantCulture);
 
-    private static long ToUnixInTbilisi(DateTime localTime)
+    private static DateTimeOffset ParseStravaUtc(string? value)
     {
-        var offset = new DateTimeOffset(localTime, TbilisiTimeZone.GetUtcOffset(localTime));
-        return offset.ToUnixTimeSeconds();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return DateTimeOffset.UtcNow;
+        }
+
+        return DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
     }
 
     private static DateTime ParseStravaLocal(string value)
@@ -245,6 +274,13 @@ public sealed class AttendanceJobService(
         }
 
         return DateTime.Parse(value, CultureInfo.InvariantCulture);
+    }
+
+    private static DateTimeOffset ToUtc(DateOnly localDate, TimeSpan localTime, TimeZoneInfo timeZone)
+    {
+        var localDateTime = localDate.ToDateTime(TimeOnly.MinValue).Add(localTime);
+        var utc = TimeZoneInfo.ConvertTimeToUtc(localDateTime, timeZone);
+        return new DateTimeOffset(utc, TimeSpan.Zero);
     }
 
     private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
@@ -272,19 +308,30 @@ public sealed class AttendanceJobService(
         return string.IsNullOrWhiteSpace(fullName) ? user.TelegramUserId.ToString(CultureInfo.InvariantCulture) : fullName;
     }
 
-    private static TimeZoneInfo ResolveTbilisiTimeZone()
+    private static TimeZoneInfo ResolveTimeZone(string timeZoneId)
     {
-        foreach (var id in new[] { "Asia/Tbilisi", "Georgian Standard Time" })
+        try
         {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById(id);
-            }
-            catch
-            {
-            }
+            return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
         }
+        catch
+        {
+            foreach (var id in new[] { "Asia/Tbilisi", "Georgian Standard Time" })
+            {
+                try
+                {
+                    return TimeZoneInfo.FindSystemTimeZoneById(id);
+                }
+                catch
+                {
+                }
+            }
 
-        throw new InvalidOperationException("Cannot resolve timezone for Asia/Tbilisi.");
+            throw new InvalidOperationException($"Cannot resolve timezone '{timeZoneId}'.");
+        }
     }
 }
+
+
+
+

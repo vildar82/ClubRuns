@@ -5,24 +5,27 @@ Telegram bot for running clubs attendance tracking with one-time Strava connecti
 ## What the bot does
 
 - Registers a Telegram user and connects Strava once via `/start`.
-- Stores multiple club runs in SQLite.
-- Keeps a separate member list for each club run.
-- Runs attendance checks for every active club run scheduled for the selected day.
-- Lets admins create and edit club runs from Telegram through a guided `/manage` dialog with inline buttons.
-- Keeps legacy import and leaderboard support for old manually tracked statistics.
+- Stores multiple clubs and multiple recurring runs in SQLite.
+- Lets users register themselves for upcoming run events.
+- Runs attendance checks only for users registered for a specific event instance.
+- Lets admins create and edit clubs and runs from Telegram through a guided `/manage` dialog with inline buttons.
+- Keeps legacy import support for old manually tracked statistics.
 
 ## Current bot commands
 
 User commands:
 - `/start` - register user and show Strava connect button.
-- `/leaderboard` - show combined legacy + auto-tracked attendance leaderboard.
+- `/clubs` - list clubs.
+- `/runs` - browse active runs and register with inline buttons.
+- `/myregistrations` - list upcoming registrations.
+- `/leaderboard` - show run statistics based on auto-tracked event results.
 - `/myid` - show Telegram user id.
 - `/help` - show help.
 
 Admin commands:
-- `/manage` - create and edit club runs with prompts.
-- `/users` - list registered users and Strava connection status.
-- `/run [YYYY-MM-DD] [club_run_id]` - run attendance check manually.
+- `/manage` - create and edit clubs and runs.
+- `/users` - list registered users and Strava connection status.`r`n- `/clubs` - list clubs.
+- `/run` - choose a club and run, then start attendance check manually.
 - `/admins` - list admins.
 - `/addadmin <id|@username>` - add admin.
 - `/setstrava <client_id> <client_secret>` - store Strava credentials in DB settings.
@@ -80,10 +83,6 @@ Optional at startup:
 - `Strava__ClientSecret`
 - `Strava__UseReadAllScope`
 - `Database__Path`
-- `Schedule__DayOfWeek`
-- `Schedule__Hour`
-- `Schedule__MinuteFrom`
-- `Schedule__MinuteTo`
 - `Logging__LogPath`
 
 Notes:
@@ -135,10 +134,11 @@ What starts together in one process:
 ```
 
 3. Run `/manage`.
-4. Create a club run.
-5. Add members to the run.
+4. Create a club.
+5. Create a run inside that club.
 6. Ask users to run `/start` and connect Strava.
-7. Run `/run` to test attendance manually.
+7. Ask users to open `/runs` and register for the next event.
+8. Run `/run` to test attendance manually.
 
 ### 6. How to find admin Telegram user ids
 
@@ -161,12 +161,21 @@ Current recommendation:
 `/manage` opens an inline-button admin flow.
 
 Available actions:
+- `Create club`
+- `List clubs`
+- `Delete club`
 - `Create run`
 - `Edit run`
 - `List runs`
 - `Cancel`
 
-Create flow asks for:
+Create club asks for:
+- club name
+- time zone id, for example `Asia/Tbilisi`
+- or `skip` to use the default app time zone
+
+Create run asks for:
+- club
 - run name
 - day of week
 - schedule hour and minute window
@@ -174,36 +183,33 @@ Create flow asks for:
 - radius in km
 - attendance search window start/end
 - target start time
+- attendance check time
 - optional report chat id
 
-Edit flow supports:
+Edit run supports:
 - edit name
 - edit day
 - edit hour
 - edit minute range
 - edit start point and radius
 - edit attendance window
+- edit attendance check time
 - edit report chat id
 - toggle active/inactive
-- manage members
 - run selected club run immediately
-
-Member management supports:
-- list members
-- add member by Telegram user id or `@username`
-- remove member by Telegram user id or `@username`
-
-Important: user must have already used `/start` before they can be added to a club run.
 
 ## Data model
 
 Core tables:
 - `users`
 - `strava_auth`
+- `clubs`
 - `club_runs`
-- `club_run_members`
-- `club_run_reports`
-- `club_run_attendance`
+- `event_instances`
+- `event_registrations`
+- `event_results`
+- `event_reports`
+- `strava_request_queue`
 - `oauth_states`
 - `admins`
 - `app_settings`
@@ -223,10 +229,6 @@ Main settings:
 - `Strava.ClientId` - optional fallback Strava client id.
 - `Strava.ClientSecret` - optional fallback Strava client secret.
 - `Database.Path` - SQLite file path, relative paths are resolved from app runtime directory.
-- `Schedule.DayOfWeek` - global scheduler day in Tbilisi time.
-- `Schedule.Hour` - global scheduler hour.
-- `Schedule.MinuteFrom` - beginning of scheduler catch-up window.
-- `Schedule.MinuteTo` - end of scheduler catch-up window.
 - `Logging.LogPath` - log file path.
 
 Runtime Strava credentials set by `/setstrava` are stored in the database and override config values.
@@ -244,6 +246,12 @@ Telegram flow:
 ## Notes
 
 - Tokens are stored in plain text in SQLite for portability.
-- Scheduler checks only active club runs that match the selected day.
-- Manual `/run` can target all runs for a day or a specific `club_run_id`.
+- Scheduler checks active club runs based on each run's own local check time and the default app time zone.
+- Manual `/run` opens an admin inline flow to choose a club and run.
 - Private Strava activities require `activity:read_all`.
+
+
+
+
+
+

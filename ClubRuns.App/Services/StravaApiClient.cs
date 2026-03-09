@@ -110,6 +110,8 @@ public sealed class ActivityResponse
     [JsonPropertyName("id")] public long Id { get; set; }
     [JsonPropertyName("type")] public string Type { get; set; } = string.Empty;
     [JsonPropertyName("distance")] public double DistanceMeters { get; set; }
+    [JsonPropertyName("start_date")] public string StartDateUtc { get; set; } = string.Empty;
     [JsonPropertyName("start_date_local")] public string StartDateLocal { get; set; } = string.Empty;
     [JsonPropertyName("start_latlng")] public List<double>? StartLatLng { get; set; }
 }
+

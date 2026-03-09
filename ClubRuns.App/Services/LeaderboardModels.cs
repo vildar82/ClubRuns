@@ -1,19 +1,23 @@
 namespace ClubRuns.App.Services;
 
-public sealed record LeaderboardEntry(
-    string DisplayName,
-    string? TelegramUsername,
-    int RunsCount,
-    int SunCount,
-    int NoSunCount);
+public sealed record RunStatisticsEntry(
+    long ClubRunId,
+    string ClubName,
+    string RunName,
+    int EventsCount,
+    int TotalRegistered,
+    int TotalFound,
+    int TotalNotFound,
+    int TotalErrors,
+    int BestAttendance,
+    string? BestAttendanceDate,
+    string? LatestEventDate);
 
 public sealed record LeaderboardSummary(
-    IReadOnlyList<LeaderboardEntry> Entries,
-    int TotalParticipants,
-    int TotalFoundAttendances,
-    int TotalMissedAttendances,
-    int TotalTrackedAttempts,
-    int AutoRunsCount,
-    int? LatestRunAttendance,
-    int? HighestAttendance,
-    string? HighestAttendanceDate);
+    IReadOnlyList<RunStatisticsEntry> Entries,
+    int TotalRuns,
+    int TotalEvents,
+    int TotalRegistered,
+    int TotalFound,
+    int TotalNotFound,
+    int TotalErrors);

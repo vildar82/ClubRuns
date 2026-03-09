@@ -21,6 +21,9 @@ builder.Services.AddTransient<AttendanceJobService>();
 builder.Services.AddTransient<LegacyStatsImporterService>();
 builder.Services.AddTransient<LeaderboardService>();
 builder.Services.AddSingleton<RuntimeSettingsService>();
+builder.Services.AddSingleton<StravaRequestScheduler>();
+builder.Services.AddSingleton<TelegramPresentationService>();
+builder.Services.AddSingleton<TelegramManageFlowService>();
 
 var app = builder.Build();
 
@@ -31,6 +34,7 @@ await repository.InitializeAsync();
 // Seed bootstrap admins from config; dynamic additions are stored in DB.
 var appOptions = app.Services.GetRequiredService<IOptions<AppOptions>>().Value;
 await repository.EnsureAdminsAsync(appOptions.Telegram.AdminTelegramUserIds);
+await repository.InitializeEventSchemaAsync(appOptions.Schedule.TimeZoneId);
 
 ConfigureListenFromRedirectUri(app);
 app.MapGet("/", () => Results.Text("ClubRuns is running."));
@@ -86,7 +90,7 @@ static void RegisterCoreServices(IServiceCollection services, IConfiguration con
 static void ConfigureSerilog(IConfiguration configuration)
 {
     // Log file path can be relative in config; convert to absolute path near app binaries.
-    var logPath = configuration["Logging:LogPath"] ?? "logs/trc-bot-.log";
+    var logPath = configuration["Logging:LogPath"] ?? "logs/clubruns-.log";
     if (!Path.IsPathRooted(logPath))
         logPath = Path.Combine(AppContext.BaseDirectory, logPath);
 
@@ -113,6 +117,5 @@ static void ConfigureListenFromRedirectUri(WebApplication app)
     if (!app.Urls.Contains(listenUrl, StringComparer.OrdinalIgnoreCase))
         app.Urls.Add(listenUrl);
 }
-
 
 
