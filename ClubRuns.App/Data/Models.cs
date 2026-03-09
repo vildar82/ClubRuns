@@ -1,4 +1,4 @@
-namespace TRC_Bot;
+namespace ClubRuns.App.Data;
 
 // users table row
 public sealed record UserRecord(

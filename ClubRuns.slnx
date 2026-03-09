@@ -3,5 +3,5 @@
     <File Path=".gitignore" />
     <File Path="README.md" />
   </Folder>
-  <Project Path="TRC_Bot/TRC_Bot.csproj" />
+  <Project Path="ClubRuns.App/ClubRuns.App.csproj" />
 </Solution>

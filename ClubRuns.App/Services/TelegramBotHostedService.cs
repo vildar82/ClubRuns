@@ -2,13 +2,14 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using ClubRuns.App.Data;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Services;
 
 public sealed class TelegramBotHostedService(
     ITelegramBotClient botClient,

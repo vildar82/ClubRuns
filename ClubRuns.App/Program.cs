@@ -1,7 +1,11 @@
+using ClubRuns.App.Config;
+using ClubRuns.App.Data;
+using ClubRuns.App.Security;
+using ClubRuns.App.Services;
+using ClubRuns.App.Web;
 using Microsoft.Extensions.Options;
 using Serilog;
 using Telegram.Bot;
-using TRC_Bot;
 
 var builder = WebApplication.CreateBuilder(args);
 

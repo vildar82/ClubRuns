@@ -1,6 +1,8 @@
+using ClubRuns.App.Config;
+using ClubRuns.App.Data;
 using Microsoft.Extensions.Options;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Services;
 
 public sealed class RuntimeSettingsService(SqliteRepository repository, IOptions<AppOptions> options)
 {

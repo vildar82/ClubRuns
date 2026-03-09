@@ -1,6 +1,7 @@
 using System.Globalization;
+using ClubRuns.App.Data;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Services;
 
 public sealed class LeaderboardService(SqliteRepository repository)
 {

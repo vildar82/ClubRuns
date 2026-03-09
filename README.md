@@ -91,7 +91,7 @@ Legacy compatibility tables still exist:
 
 ## Configuration
 
-Base config file: `TRC_Bot/appsettings.json`
+Base config file: `ClubRuns.App/appsettings.json`
 
 Properties:
 - `Telegram.BotToken` - Telegram bot token from `@BotFather`.
@@ -111,7 +111,7 @@ Runtime Strava credentials set by `/setstrava` are stored in the database and ov
 
 ## Local development
 
-1. Fill `TRC_Bot/local.settings.json` or use environment variables.
+1. Fill `ClubRuns.App/local.settings.json` or use environment variables.
 2. Set at least:
 - `Telegram.BotToken`
 - `Telegram.AdminTelegramUserIds`
@@ -129,7 +129,7 @@ dotnet run --project .\TRC_Bot\TRC_Bot.csproj
 ## Legacy import
 
 Example file:
-- `TRC_Bot/legacy_stats.example.txt`
+- `ClubRuns.App/legacy_stats.example.txt`
 
 Telegram flow:
 1. `/importlegacy`

@@ -1,6 +1,8 @@
+using ClubRuns.App.Data;
+using ClubRuns.App.Services;
 using Telegram.Bot;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Web;
 
 public static class StravaCallbackEndpoints
 {
@@ -69,4 +71,3 @@ public static class StravaCallbackEndpoints
         });
     }
 }
-

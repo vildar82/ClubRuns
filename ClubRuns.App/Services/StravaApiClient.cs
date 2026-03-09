@@ -1,7 +1,8 @@
 using System.Text.Json.Serialization;
+using ClubRuns.App.Config;
 using Microsoft.Extensions.Options;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Services;
 
 public sealed class StravaApiClient(HttpClient httpClient, IOptions<AppOptions> options, RuntimeSettingsService runtimeSettings)
 {

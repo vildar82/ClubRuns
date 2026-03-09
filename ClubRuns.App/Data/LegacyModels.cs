@@ -1,4 +1,4 @@
-namespace TRC_Bot;
+namespace ClubRuns.App.Data;
 
 public sealed record LegacyStatUpsert(
     string DisplayName,

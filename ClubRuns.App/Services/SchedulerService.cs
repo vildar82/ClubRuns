@@ -1,6 +1,7 @@
+using ClubRuns.App.Config;
 using Microsoft.Extensions.Options;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Services;
 
 public sealed class SchedulerService(
     ILogger<SchedulerService> logger,

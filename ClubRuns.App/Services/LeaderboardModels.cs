@@ -1,4 +1,4 @@
-namespace TRC_Bot;
+namespace ClubRuns.App.Services;
 
 public sealed record LeaderboardEntry(
     string DisplayName,

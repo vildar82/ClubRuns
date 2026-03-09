@@ -1,6 +1,7 @@
+using ClubRuns.App.Security;
 using Microsoft.Data.Sqlite;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Data;
 
 public sealed class SqliteRepository
 {

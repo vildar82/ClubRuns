@@ -1,4 +1,6 @@
-namespace TRC_Bot;
+using ClubRuns.App.Data;
+
+namespace ClubRuns.App.Services;
 
 public sealed record AttendanceUserResult(
     UserRecord User,

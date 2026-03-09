@@ -5,6 +5,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AssemblyName>ClubRuns.App</AssemblyName>
+    <RootNamespace>ClubRuns.App</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

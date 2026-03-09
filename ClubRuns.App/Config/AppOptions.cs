@@ -1,4 +1,4 @@
-namespace TRC_Bot;
+namespace ClubRuns.App.Config;
 
 public sealed class AppOptions
 {

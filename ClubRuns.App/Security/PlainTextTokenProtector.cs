@@ -1,4 +1,4 @@
-namespace TRC_Bot;
+namespace ClubRuns.App.Security;
 
 public sealed class PlainTextTokenProtector : ITokenProtector
 {

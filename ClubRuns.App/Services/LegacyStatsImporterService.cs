@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
+using ClubRuns.App.Data;
 
-namespace TRC_Bot;
+namespace ClubRuns.App.Services;
 
 public sealed class LegacyStatsImporterService(SqliteRepository repository, ILogger<LegacyStatsImporterService> logger)
 {
