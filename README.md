@@ -1,6 +1,6 @@
-# TRC_Bot
+# ClubRuns
 
-Telegram bot for Tbilisi Running Club attendance tracking with one-time Strava connection and multiple configurable club runs.
+Telegram bot for running clubs attendance tracking with one-time Strava connection and multiple configurable club runs.
 
 ## What the bot does
 

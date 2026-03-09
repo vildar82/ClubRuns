@@ -29,7 +29,7 @@ var appOptions = app.Services.GetRequiredService<IOptions<AppOptions>>().Value;
 await repository.EnsureAdminsAsync(appOptions.Telegram.AdminTelegramUserIds);
 
 ConfigureListenFromRedirectUri(app);
-app.MapGet("/", () => Results.Text("TRC Bot is running."));
+app.MapGet("/", () => Results.Text("ClubRuns is running."));
 app.MapStravaEndpoints();
 
 await app.RunAsync();

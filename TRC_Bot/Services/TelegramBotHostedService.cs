@@ -163,7 +163,7 @@ public sealed class TelegramBotHostedService(
             var keyboard = new InlineKeyboardMarkup(InlineKeyboardButton.WithUrl("Connect Strava", url));
             await botClient.SendMessage(
                 chatId,
-                "Welcome to TRC Bot. Press the button to connect your Strava account.",
+                "Welcome to ClubRuns. Press the button to connect your Strava account.",
                 replyMarkup: keyboard,
                 cancellationToken: ct);
         }
@@ -1154,7 +1154,7 @@ public sealed class TelegramBotHostedService(
         var isConnectedToStrava = await repository.IsStravaConnectedByTelegramUserIdAsync(telegramUserId, ct);
         var lines = new List<string>
         {
-            "TRC Bot commands:",
+            "ClubRuns commands:",
             "/start - register and connect Strava",
             $"Strava status: {(isConnectedToStrava ? "connected" : "not connected")}",
             "/leaderboard - show combined legacy leaderboard",
