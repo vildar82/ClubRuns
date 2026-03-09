@@ -32,6 +32,130 @@ Admin commands:
 - `/importlegacycancel` - cancel import session.
 - `/importlegacyexample` - send example legacy import text.
 
+## Get Started
+
+### 1. Create a Telegram bot
+
+1. Open `@BotFather` in Telegram.
+2. Run `/newbot`.
+3. Save the bot token.
+
+This token is required before the application can start.
+
+### 2. Create a Strava application
+
+1. Open your Strava API settings page.
+2. Create an application.
+3. Save:
+- `ClientId`
+- `ClientSecret`
+4. Set the Strava callback URL to your ClubRuns callback endpoint.
+
+What callback URL means:
+- after the user approves Strava access, Strava redirects the browser back to ClubRuns
+- that redirect must point to a real HTTP endpoint in this application
+- the endpoint path in ClubRuns is `/strava/callback`
+
+Local example:
+- `http://localhost:5099/strava/callback`
+
+Production example:
+- `https://clubruns.example.com/strava/callback`
+
+Important:
+- the value in Strava app settings and the value in ClubRuns config must be exactly the same
+- in production it should be a public HTTPS URL
+
+### 3. Configure the application
+
+For deployment, configure these environment variables:
+
+Required:
+- `Telegram__BotToken`
+- `Telegram__AdminTelegramUserIds__0`
+- `Strava__RedirectUri`
+
+Optional at startup:
+- `Strava__ClientId`
+- `Strava__ClientSecret`
+- `Strava__UseReadAllScope`
+- `Database__Path`
+- `Schedule__DayOfWeek`
+- `Schedule__Hour`
+- `Schedule__MinuteFrom`
+- `Schedule__MinuteTo`
+- `Logging__LogPath`
+
+Notes:
+- `Telegram__AdminTelegramUserIds__0` is the first admin Telegram user id
+- add `__1`, `__2`, and so on for more bootstrap admins
+- `Strava__ClientId` and `Strava__ClientSecret` may also be set later from Telegram with `/setstrava`
+
+Windows PowerShell example:
+
+```powershell
+$env:Telegram__BotToken = "YOUR_BOT_TOKEN"
+$env:Telegram__AdminTelegramUserIds__0 = "123456789"
+$env:Strava__RedirectUri = "http://localhost:5099/strava/callback"
+```
+
+### 4. Publish and run
+
+To build a local release:
+
+```powershell
+dotnet publish .\ClubRuns.App\ClubRuns.App.csproj -c Release -r win-x64 --self-contained false
+```
+
+Then run the published app, for example:
+
+```powershell
+.\ClubRuns.App.exe
+```
+
+For local development from source you can also run:
+
+```powershell
+dotnet run --project .\ClubRuns.App\ClubRuns.App.csproj
+```
+
+What starts together in one process:
+- Telegram bot polling
+- Strava OAuth callback endpoint
+- scheduler
+- SQLite initialization
+
+### 5. First-time setup in Telegram
+
+1. Send `/start` to the bot.
+2. If Strava secrets were not configured via environment variables, run:
+
+```text
+/setstrava <client_id> <client_secret>
+```
+
+3. Run `/manage`.
+4. Create a club run.
+5. Add members to the run.
+6. Ask users to run `/start` and connect Strava.
+7. Run `/run` to test attendance manually.
+
+### 6. How to find admin Telegram user ids
+
+Preferred way:
+- start the bot
+- send `/myid`
+- use that number in admin configuration
+
+Why ids are better than usernames:
+- Telegram usernames are optional
+- usernames can be changed by users
+- Telegram user ids are stable
+
+Current recommendation:
+- keep admin bootstrap by Telegram user id
+- allow adding admins later from inside the bot with `/addadmin <id|@username>`
+
 ## Manage dialog
 
 `/manage` opens an inline-button admin flow.
@@ -91,9 +215,7 @@ Legacy compatibility tables still exist:
 
 ## Configuration
 
-Base config file: `ClubRuns.App/appsettings.json`
-
-Properties:
+Main settings:
 - `Telegram.BotToken` - Telegram bot token from `@BotFather`.
 - `Telegram.AdminTelegramUserIds` - bootstrap admin ids on startup.
 - `Strava.RedirectUri` - OAuth callback URL, must match the Strava app settings.
@@ -107,24 +229,7 @@ Properties:
 - `Schedule.MinuteTo` - end of scheduler catch-up window.
 - `Logging.LogPath` - log file path.
 
-Runtime Strava credentials set by `/setstrava` are stored in the database and override appsettings values.
-
-## Local development
-
-1. Fill `ClubRuns.App/local.settings.json` or use environment variables.
-2. Set at least:
-- `Telegram.BotToken`
-- `Telegram.AdminTelegramUserIds`
-3. Run:
-
-```powershell
-dotnet run --project .\TRC_Bot\TRC_Bot.csproj
-```
-
-4. In Telegram:
-- run `/start`
-- run `/setstrava <client_id> <client_secret>` as admin if Strava secrets are not already configured
-- run `/manage` to create club runs
+Runtime Strava credentials set by `/setstrava` are stored in the database and override config values.
 
 ## Legacy import
 
